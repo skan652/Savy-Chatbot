@@ -1,0 +1,106 @@
+{
+  "employment_type": {
+    "question": "What is your employment type?",
+    "type": "single_choice",
+    "options": ["Full-time", "Part-time", "Self-employed", "Unemployed", "Student"],
+    "required": true,
+    "validation": {
+      "error_message": "Please select a valid employment type."
+    }
+  },
+
+  "is_uk_resident": {
+    "question": "Are you a UK resident?",
+    "type": "boolean",
+    "required": true,
+    "validation": {
+      "error_message": "Please indicate your residency status."
+    }
+  },
+
+  "monthly_salary": {
+    "question": "What is your monthly salary?",
+    "type": "number",
+    "required": true,
+    "condition": "employment_type == 'Full-time' || employment_type == 'Part-time'",
+    "validation": {
+      "min_value": 0,
+      "error_message": "Please enter a valid monthly salary."
+    }
+  },
+
+  "business_income": {
+    "question": "What is your monthly business income?",
+    "type": "number",
+    "required": true,
+    "condition": "employment_type == 'Self-employed'",
+    "validation": {
+      "min_value": 0,
+      "error_message": "Please enter a valid monthly business income."
+    }
+  },
+
+  "other_income_sources": {
+    "question": "Do you have any other sources of income?",
+    "type": "boolean",
+    "required": true
+  },
+
+  "tax_returns": {
+    "question": "Do you have tax returns for the last 2 years?",
+    "type": "boolean",
+    "required": true,
+    "condition": "employment_type == 'Self-employed'"
+  },
+
+  "has_expenses": {
+    "question": "Do you have any monthly expenses?",
+    "type": "boolean",
+    "required": true
+  },
+
+  "monthly_expenses": {
+    "question": "What is your total monthly expenses?",
+    "type": "number",
+    "required": true,
+    "condition": "has_expenses == true",
+    "validation": {
+      "min_value": 0,
+      "error_message": "Please enter a valid expense amount."
+    }
+  },
+
+  "receives_benefits": {
+    "question": "Do you receive any government benefits?",
+    "type": "boolean",
+    "required": true
+  },
+
+  "benefits_amount": {
+    "question": "What is the total monthly amount of benefits you receive?",
+    "type": "number",
+    "required": true,
+    "condition": "receives_benefits == true",
+    "validation": {
+      "min_value": 0,
+      "error_message": "Please enter a valid benefits amount."
+    }
+  },
+
+  "has_dependents": {
+    "question": "Do you have any dependents?",
+    "type": "boolean",
+    "required": true
+  },
+
+  "number_of_dependents": {
+    "question": "How many dependents do you have?",
+    "type": "number",
+    "required": true,
+    "condition": "has_dependents == true",
+    "validation": {
+      "min_value": 0,
+      "error_message": "Please enter a valid number of dependents."
+    }
+  }
+}
