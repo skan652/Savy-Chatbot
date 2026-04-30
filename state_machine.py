@@ -54,11 +54,14 @@ class StateMachineEngine:
             if not isinstance(answer, bool):
                 return {"valid": False, "message": question['validation']['error_message']}
         elif qtype == 'number':
-            if not isinstance(answer, (int, float)):
+            # Accept any numeric value
+            try:
+                num_answer = float(answer) if isinstance(answer, str) else answer
+                if 'min_value' in question['validation']:
+                    if num_answer < question['validation']['min_value']:
+                        return {"valid": False, "message": question['validation']['error_message']}
+            except (ValueError, TypeError):
                 return {"valid": False, "message": "Please enter a valid number."}
-            if 'min_value' in question['validation']:
-                if answer < question['validation']['min_value']:
-                    return {"valid": False, "message": question['validation']['error_message']}
         return {"valid": True}
 
     def evaluate_condition(self, condition):

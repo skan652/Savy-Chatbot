@@ -21,6 +21,7 @@
   "monthly_salary": {
     "question": "What is your monthly salary?",
     "type": "number",
+    "options": [500, 1000, 2000, 3000, 5000, 10000],
     "required": true,
     "condition": "employment_type == 'Full-time' || employment_type == 'Part-time'",
     "validation": {
@@ -32,6 +33,7 @@
   "business_income": {
     "question": "What is your monthly business income?",
     "type": "number",
+    "options": [500, 1000, 2000, 3000, 5000, 10000],
     "required": true,
     "condition": "employment_type == 'Self-employed'",
     "validation": {
@@ -44,6 +46,18 @@
     "question": "Do you have any other sources of income?",
     "type": "boolean",
     "required": true
+  },
+
+  "other_income_amount": {
+    "question": "What is your monthly income from other sources?",
+    "type": "number",
+    "options": [250, 500, 1000, 1500, 2000, 3000],
+    "required": true,
+    "condition": "other_income_sources == True",
+    "validation": {
+      "min_value": 0,
+      "error_message": "Please enter a valid income amount."
+    }
   },
 
   "tax_returns": {
@@ -62,8 +76,9 @@
   "monthly_expenses": {
     "question": "What is your total monthly expenses?",
     "type": "number",
+    "options": [250, 500, 1000, 1500, 2000, 3000],
     "required": true,
-    "condition": "has_expenses == true",
+    "condition": "has_expenses == True",
     "validation": {
       "min_value": 0,
       "error_message": "Please enter a valid expense amount."
@@ -79,8 +94,9 @@
   "benefits_amount": {
     "question": "What is the total monthly amount of benefits you receive?",
     "type": "number",
+    "options": [250, 500, 1000, 1500, 2000, 3000],
     "required": true,
-    "condition": "receives_benefits == true",
+    "condition": "receives_benefits == True",
     "validation": {
       "min_value": 0,
       "error_message": "Please enter a valid benefits amount."
@@ -97,7 +113,7 @@
     "question": "How many dependents do you have?",
     "type": "number",
     "required": true,
-    "condition": "has_dependents == true",
+    "condition": "has_dependents == True",
     "validation": {
       "min_value": 0,
       "error_message": "Please enter a valid number of dependents."
