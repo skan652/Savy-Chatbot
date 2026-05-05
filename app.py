@@ -68,6 +68,29 @@ def index():
         .header p {
             font-size: 14px;
             opacity: 0.9;
+            margin-bottom: 15px;
+        }
+        
+        .progress-bar {
+            height: 4px;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: white;
+            width: 0%;
+            transition: width 0.3s ease;
+            border-radius: 2px;
+        }
+        
+        .question-counter {
+            font-size: 12px;
+            opacity: 0.8;
+            margin-top: 8px;
         }
         
         #chat {
@@ -135,33 +158,47 @@ def index():
         }
         
         .options-container {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            padding: 0 20px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+            padding: 15px 20px;
             justify-content: center;
+            background: #f8f9fa;
+            border-top: 1px solid #e0e0e0;
+            max-height: 200px;
+            overflow-y: auto;
         }
         
         .option-btn {
             background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
             color: white;
             border: none;
-            padding: 12px 20px;
-            border-radius: 25px;
+            padding: 16px 20px;
+            border-radius: 12px;
             cursor: pointer;
             font-size: 14px;
-            font-weight: 500;
+            font-weight: 600;
             transition: all 0.3s ease;
             box-shadow: 0 4px 15px rgba(245, 87, 108, 0.2);
+            min-height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
         }
         
         .option-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(245, 87, 108, 0.35);
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(245, 87, 108, 0.35);
         }
         
         .option-btn:active {
-            transform: translateY(0);
+            transform: translateY(-1px);
+        }
+        
+        .option-btn:focus {
+            outline: 2px solid #667eea;
+            outline-offset: 2px;
         }
         
         .input-container {
@@ -224,6 +261,10 @@ def index():
         <div class="header">
             <h1>💬 Savy Chatbot</h1>
             <p>Financial Information Questionnaire</p>
+            <div class="question-counter" id="counter">Loading...</div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
         </div>
         <div id="chat"></div>
         <div class="options-container" id="options"></div>
@@ -234,6 +275,14 @@ def index():
     </div>
     <script>
         let currentQuestion = null;
+        let totalQuestions = 17; // Approximate total (accounts for conditional questions)
+        let answeredQuestions = 0;
+
+        function updateProgress() {
+            const progress = (answeredQuestions / totalQuestions) * 100;
+            document.getElementById('progressFill').style.width = progress + '%';
+            document.getElementById('counter').textContent = `Question ${answeredQuestions + 1}`;
+        }
 
         function addMessage(text, sender) {
             const chat = document.getElementById('chat');
@@ -255,7 +304,7 @@ def index():
             options.forEach((option, index) => {
                 const btn = document.createElement('button');
                 btn.className = 'option-btn';
-                btn.textContent = `${index + 1}. ${option}`;
+                btn.textContent = option;
                 btn.onclick = () => selectOption(option);
                 optionsContainer.appendChild(btn);
             });
@@ -267,7 +316,7 @@ def index():
             options.forEach((option, index) => {
                 const btn = document.createElement('button');
                 btn.className = 'option-btn';
-                btn.textContent = `${index + 1}. ${option}`;
+                btn.textContent = option;
                 btn.onclick = () => selectOption(option);
                 optionsContainer.appendChild(btn);
             });
@@ -275,7 +324,7 @@ def index():
             // Add "Other" button for numeric questions with options
             const otherBtn = document.createElement('button');
             otherBtn.className = 'option-btn';
-            otherBtn.textContent = `${options.length + 1}. Other (specify)`;
+            otherBtn.textContent = 'Other (specify)';
             otherBtn.onclick = () => selectOtherOption();
             optionsContainer.appendChild(otherBtn);
         }
@@ -310,6 +359,7 @@ def index():
                     } else {
                         currentQuestion = data;
                         addMessage(data.question, 'bot');
+                        updateProgress();
                         if (data.type === 'single_choice') {
                             showOptions(data.options);
                             document.getElementById('input-container').style.display = 'none';
@@ -349,9 +399,22 @@ def index():
         }
 
         document.addEventListener('DOMContentLoaded', initializeChat);
+        
         document.addEventListener('keypress', (e) => {
             const input = document.getElementById('message');
-            if (e.key === 'Enter' && input.offsetParent !== null && input.offsetParent !== undefined) {
+            const options = document.getElementById('options');
+            
+            // Number key pressed - select option
+            if (e.key >= '1' && e.key <= '9' && options.offsetParent !== null) {
+                const index = parseInt(e.key) - 1;
+                const buttons = options.querySelectorAll('.option-btn');
+                if (index < buttons.length) {
+                    buttons[index].click();
+                    e.preventDefault();
+                }
+            }
+            // Enter key pressed - send message
+            else if (e.key === 'Enter' && input.offsetParent !== null && input.offsetParent !== undefined) {
                 sendMessage();
             }
         });
@@ -376,6 +439,7 @@ def index():
                     if (data.status === 'error') {
                         addMessage(data.message, 'bot');
                     } else {
+                        answeredQuestions++;
                         addMessage(data.message, 'bot');
                         getQuestion();
                     }
@@ -384,11 +448,13 @@ def index():
 
         function restartQuestionnaire() {
             // Clear session and restart
+            answeredQuestions = 0;
             fetch('/restart', { method: 'POST' })
                 .then(() => {
                     // Clear chat and restart
                     document.getElementById('chat').innerHTML = '';
                     document.getElementById('options').innerHTML = '';
+                    updateProgress();
                     getQuestion();
                 });
         }
