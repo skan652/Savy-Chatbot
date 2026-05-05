@@ -1,495 +1,224 @@
-from flask import Flask, request, jsonify, render_template_string, session
+from flask import Flask, request, redirect, url_for, render_template_string, session
 from state_machine import StateMachineEngine
-import json
 
 app = Flask(__name__)
 app.secret_key = 'savy-chatbot-secret-key'
-engines = {}  # Store engines per session
+
+engines = {}
+
+def init_session():
+    if '_id' not in session:
+        session['_id'] = str(len(engines) + 1)
+        session['answers'] = []  # 🔹 store history
+
+
+def build_engine_from_history():
+    """Rebuild engine from stored answers"""
+    session_id = session['_id']
+
+    engine = StateMachineEngine('response.json')
+
+    for ans in session.get('answers', []):
+        engine.answer_question(ans)
+
+    engines[session_id] = engine
+    return engine
+
 
 def get_engine():
-    """Get or create engine for current session"""
-    session_id = session.get('_id')
+    init_session()
+    session_id = session['_id']
+
     if session_id not in engines:
-        engines[session_id] = StateMachineEngine('response.json')
+        return build_engine_from_history()
+
     return engines[session_id]
 
+
+# 🔹 Home
 @app.route('/')
 def index():
-    return render_template_string("""
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Savy Chatbot</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
-        }
-        
-        .container {
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            width: 100%;
-            max-width: 600px;
-            display: flex;
-            flex-direction: column;
-            height: 90vh;
-            max-height: 800px;
-        }
-        
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px 20px;
-            border-radius: 20px 20px 0 0;
-            text-align: center;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-        }
-        
-        .header h1 {
-            font-size: 28px;
-            font-weight: 600;
-            margin-bottom: 5px;
-        }
-        
-        .header p {
-            font-size: 14px;
-            opacity: 0.9;
-            margin-bottom: 15px;
-        }
-        
-        .progress-bar {
-            height: 4px;
-            background: rgba(255, 255, 255, 0.3);
-            border-radius: 2px;
-            overflow: hidden;
-            margin-top: 10px;
-        }
-        
-        .progress-fill {
-            height: 100%;
-            background: white;
-            width: 0%;
-            transition: width 0.3s ease;
-            border-radius: 2px;
-        }
-        
-        .question-counter {
-            font-size: 12px;
-            opacity: 0.8;
-            margin-top: 8px;
-        }
-        
-        #chat {
-            flex: 1;
-            overflow-y: auto;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            background: #f8f9fa;
-        }
-        
-        #chat::-webkit-scrollbar {
-            width: 8px;
-        }
-        
-        #chat::-webkit-scrollbar-track {
-            background: #f1f1f1;
-            border-radius: 10px;
-        }
-        
-        #chat::-webkit-scrollbar-thumb {
-            background: #667eea;
-            border-radius: 10px;
-        }
-        
-        #chat::-webkit-scrollbar-thumb:hover {
-            background: #764ba2;
-        }
-        
-        .bot, .user {
-            padding: 12px 16px;
-            border-radius: 14px;
-            max-width: 80%;
-            word-wrap: break-word;
-            animation: slideIn 0.3s ease-out;
-        }
-        
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-        
-        .bot {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            align-self: flex-start;
-            border-radius: 14px 14px 14px 0;
-            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.2);
-        }
-        
-        .user {
-            background: #e8f0fe;
-            color: #1f2937;
-            align-self: flex-end;
-            border-radius: 14px 14px 0 14px;
-            text-align: right;
-            border-left: 3px solid #667eea;
-        }
-        
-        .options-container {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-            gap: 12px;
-            padding: 15px 20px;
-            justify-content: center;
-            background: #f8f9fa;
-            border-top: 1px solid #e0e0e0;
-            max-height: 200px;
-            overflow-y: auto;
-        }
-        
-        .option-btn {
-            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-            color: white;
-            border: none;
-            padding: 16px 20px;
-            border-radius: 12px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 600;
-            transition: all 0.3s ease;
-            box-shadow: 0 4px 15px rgba(245, 87, 108, 0.2);
-            min-height: 50px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            text-align: center;
-        }
-        
-        .option-btn:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 8px 25px rgba(245, 87, 108, 0.35);
-        }
-        
-        .option-btn:active {
-            transform: translateY(-1px);
-        }
-        
-        .option-btn:focus {
-            outline: 2px solid #667eea;
-            outline-offset: 2px;
-        }
-        
-        .input-container {
-            display: none;
-            padding: 20px;
-            border-top: 1px solid #e0e0e0;
-            background: white;
-            border-radius: 0 0 20px 20px;
-            gap: 10px;
-        }
-        
-        .input-container.show {
-            display: flex;
-        }
-        
-        #message {
-            flex: 1;
-            padding: 12px 16px;
-            border: 2px solid #e0e0e0;
-            border-radius: 25px;
-            font-size: 14px;
-            outline: none;
-            transition: all 0.3s ease;
-            font-family: inherit;
-        }
-        
-        #message:focus {
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-        }
-        
-        #message::placeholder {
-            color: #999;
-        }
-        
-        .send-btn {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            padding: 12px 28px;
-            border-radius: 25px;
-            cursor: pointer;
-            font-weight: 600;
-            transition: all 0.3s ease;
-            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
-        }
-        
-        .send-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
-        }
-        
-        .send-btn:active {
-            transform: translateY(0);
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>💬 Savy Chatbot</h1>
-            <p>Financial Information Questionnaire</p>
-            <div class="question-counter" id="counter">Loading...</div>
-            <div class="progress-bar">
-                <div class="progress-fill" id="progressFill"></div>
-            </div>
-        </div>
-        <div id="chat"></div>
-        <div class="options-container" id="options"></div>
-        <div class="input-container" id="input-container">
-            <input type="text" id="message" placeholder="Type your answer...">
-            <button class="send-btn" onclick="sendMessage()">Send</button>
-        </div>
-    </div>
-    <script>
-        let currentQuestion = null;
-        let totalQuestions = 17; // Approximate total (accounts for conditional questions)
-        let answeredQuestions = 0;
+    return redirect(url_for('question_page'))
 
-        function updateProgress() {
-            const progress = (answeredQuestions / totalQuestions) * 100;
-            document.getElementById('progressFill').style.width = progress + '%';
-            document.getElementById('counter').textContent = `Question ${answeredQuestions + 1}`;
-        }
 
-        function addMessage(text, sender) {
-            const chat = document.getElementById('chat');
-            const msg = document.createElement('div');
-            msg.className = sender;
-            msg.textContent = text;
-            chat.appendChild(msg);
-            chat.scrollTop = chat.scrollHeight;
-        }
-
-        function clearOptions() {
-            const optionsContainer = document.getElementById('options');
-            optionsContainer.innerHTML = '';
-        }
-
-        function showOptions(options) {
-            const optionsContainer = document.getElementById('options');
-            clearOptions();
-            options.forEach((option, index) => {
-                const btn = document.createElement('button');
-                btn.className = 'option-btn';
-                btn.textContent = option;
-                btn.onclick = () => selectOption(option);
-                optionsContainer.appendChild(btn);
-            });
-        }
-
-        function showOptionsWithOther(options) {
-            const optionsContainer = document.getElementById('options');
-            clearOptions();
-            options.forEach((option, index) => {
-                const btn = document.createElement('button');
-                btn.className = 'option-btn';
-                btn.textContent = option;
-                btn.onclick = () => selectOption(option);
-                optionsContainer.appendChild(btn);
-            });
-            
-            // Add "Other" button for numeric questions with options
-            const otherBtn = document.createElement('button');
-            otherBtn.className = 'option-btn';
-            otherBtn.textContent = 'Other (specify)';
-            otherBtn.onclick = () => selectOtherOption();
-            optionsContainer.appendChild(otherBtn);
-        }
-
-        function selectOption(option) {
-            addMessage(option, 'user');
-            clearOptions();
-            sendAnswer(option);
-        }
-
-        function selectOtherOption() {
-            clearOptions();
-            document.getElementById('input-container').style.display = 'block';
-            document.getElementById('message').placeholder = 'Enter a custom amount...';
-            document.getElementById('message').type = 'number';
-            document.getElementById('message').focus();
-        }
-
-        function getQuestion() {
-            fetch('/get_question')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.completed) {
-                        addMessage('✅ Questionnaire completed! Thank you for your responses.', 'bot');
-                        document.getElementById('input-container').style.display = 'none';
-                        // Add restart button
-                        const restartBtn = document.createElement('button');
-                        restartBtn.className = 'option-btn';
-                        restartBtn.textContent = '🔄 Start New Questionnaire';
-                        restartBtn.onclick = () => restartQuestionnaire();
-                        document.getElementById('options').appendChild(restartBtn);
-                    } else {
-                        currentQuestion = data;
-                        addMessage(data.question, 'bot');
-                        updateProgress();
-                        if (data.type === 'single_choice') {
-                            showOptions(data.options);
-                            document.getElementById('input-container').style.display = 'none';
-                        } else if (data.type === 'boolean') {
-                            showOptions(['Yes', 'No']);
-                            document.getElementById('input-container').style.display = 'none';
-                        } else if (data.type === 'number' && data.options) {
-                            showOptionsWithOther(data.options);
-                            document.getElementById('input-container').style.display = 'none';
-                        } else if (data.type === 'number') {
-                            document.getElementById('input-container').style.display = 'block';
-                            document.getElementById('message').placeholder = 'Enter a number...';
-                            document.getElementById('message').type = 'number';
-                            document.getElementById('message').focus();
-                        } else {
-                            document.getElementById('input-container').style.display = 'block';
-                        }
-                    }
-                });
-        }
-
-        function sendMessage() {
-            const input = document.getElementById('message');
-            const answer = input.value.trim();
-            if (!answer) return;
-
-            addMessage(answer, 'user');
-            input.value = '';
-            input.placeholder = 'Type your answer...';
-            input.type = 'text'; // Reset type back to text
-
-            sendAnswer(answer);
-        }
-
-        function initializeChat() {
-            getQuestion();
-        }
-
-        document.addEventListener('DOMContentLoaded', initializeChat);
-        
-        document.addEventListener('keypress', (e) => {
-            const input = document.getElementById('message');
-            const options = document.getElementById('options');
-            
-            // Number key pressed - select option
-            if (e.key >= '1' && e.key <= '9' && options.offsetParent !== null) {
-                const index = parseInt(e.key) - 1;
-                const buttons = options.querySelectorAll('.option-btn');
-                if (index < buttons.length) {
-                    buttons[index].click();
-                    e.preventDefault();
-                }
-            }
-            // Enter key pressed - send message
-            else if (e.key === 'Enter' && input.offsetParent !== null && input.offsetParent !== undefined) {
-                sendMessage();
-            }
-        });
-
-        function sendAnswer(answer) {
-            let processedAnswer;
-            if (currentQuestion.type === 'boolean') {
-                processedAnswer = answer.toLowerCase() === 'yes';
-            } else if (currentQuestion.type === 'number') {
-                processedAnswer = parseFloat(answer);
-            } else {
-                processedAnswer = answer;
-            }
-
-            fetch('/answer', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ answer: processedAnswer })
-            })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'error') {
-                        addMessage(data.message, 'bot');
-                    } else {
-                        answeredQuestions++;
-                        addMessage(data.message, 'bot');
-                        getQuestion();
-                    }
-                });
-        }
-
-        function restartQuestionnaire() {
-            // Clear session and restart
-            answeredQuestions = 0;
-            fetch('/restart', { method: 'POST' })
-                .then(() => {
-                    // Clear chat and restart
-                    document.getElementById('chat').innerHTML = '';
-                    document.getElementById('options').innerHTML = '';
-                    updateProgress();
-                    getQuestion();
-                });
-        }
-    </script>
-</body>
-</html>
-    """)
-
-@app.route('/get_question')
-def get_question():
+# 🔹 Question Page
+@app.route('/question')
+def question_page():
     engine = get_engine()
     question = engine.get_current_question()
-    if question:
-        return jsonify(question)
-    else:
-        return jsonify({'completed': True})
 
+    if not question:
+        return redirect(url_for('completed'))
+
+    return render_template_string("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Questionnaire</title>
+        <style>
+            body {
+                font-family: Arial;
+                background: linear-gradient(135deg, #667eea, #764ba2);
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+            }
+
+            .container {
+                background: white;
+                padding: 30px;
+                border-radius: 15px;
+                width: 400px;
+                text-align: center;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            }
+
+            h2 {
+                margin-bottom: 20px;
+            }
+
+            button {
+                width: 100%;
+                padding: 10px;
+                margin: 8px 0;
+                border: none;
+                border-radius: 8px;
+                background: #667eea;
+                color: white;
+                cursor: pointer;
+            }
+
+            button:hover {
+                background: #5a67d8;
+            }
+
+            .back-btn {
+                background: #ccc;
+                color: black;
+            }
+
+            .back-btn:hover {
+                background: #bbb;
+            }
+
+            input {
+                width: 100%;
+                padding: 10px;
+                margin-top: 10px;
+                border-radius: 8px;
+                border: 1px solid #ccc;
+            }
+        </style>
+    </head>
+    <body>
+
+        <div class="container">
+            <h2>{{ question.question }}</h2>
+
+            <form method="POST" action="/answer">
+
+                {% if question.type == 'single_choice' %}
+                    {% for opt in question.options %}
+                        <button type="submit" name="answer" value="{{ opt }}">{{ opt }}</button>
+                    {% endfor %}
+
+                {% elif question.type == 'boolean' %}
+                    <button type="submit" name="answer" value="true">Yes</button>
+                    <button type="submit" name="answer" value="false">No</button>
+
+                {% elif question.type == 'number' %}
+                    <input type="number" name="answer" required>
+                    <button type="submit">Submit</button>
+
+                {% else %}
+                    <input type="text" name="answer" required>
+                    <button type="submit">Submit</button>
+
+                {% endif %}
+            </form>
+
+            {% if session.answers|length > 0 %}
+                <form method="POST" action="/back">
+                    <button class="back-btn">⬅ Back</button>
+                </form>
+            {% endif %}
+        </div>
+
+    </body>
+    </html>
+    """, question=question)
+
+
+# 🔹 Answer
 @app.route('/answer', methods=['POST'])
 def answer():
-    data = request.get_json()
-    answer_value = data.get('answer')
-    
-    engine = get_engine()
-    result = engine.answer_question(answer_value)
-    
-    return jsonify(result)
+    # 🔹 Ensure session is initialized
+    init_session()
 
-@app.route('/restart', methods=['POST'])
+    # 🔹 Ensure answers list exists (extra safety)
+    if 'answers' not in session:
+        session['answers'] = []
+
+    answer_value = request.form.get('answer')
+    engine = get_engine()
+
+    current_q = engine.get_current_question()
+
+    # Convert types
+    if current_q['type'] == 'boolean':
+        answer_value = answer_value == 'true'
+    elif current_q['type'] == 'number':
+        answer_value = float(answer_value)
+
+    # 🔹 Store answer safely
+    session['answers'].append(answer_value)
+
+    engine.answer_question(answer_value)
+
+    return redirect(url_for('question_page'))
+
+
+# 🔹 BACK BUTTON LOGIC
+@app.route('/back', methods=['POST'])
+def go_back():
+    if session.get('answers'):
+        session['answers'].pop()  # remove last answer
+
+    # 🔹 rebuild engine from remaining answers
+    build_engine_from_history()
+
+    return redirect(url_for('question_page'))
+
+
+# 🔹 Completed
+@app.route('/completed')
+def completed():
+    return """
+    <html>
+    <body style="text-align:center; font-family:Arial; margin-top:50px;">
+        <h1>✅ Questionnaire Completed!</h1>
+        <br>
+        <a href="/restart">
+            <button style="padding:10px 20px;">Restart</button>
+        </a>
+    </body>
+    </html>
+    """
+
+
+# 🔹 Restart
+@app.route('/restart')
 def restart():
-    # Clear engine for current session
     session_id = session.get('_id')
+
     if session_id in engines:
         del engines[session_id]
+
     session.clear()
-    return jsonify({'status': 'restarted'})
+
+    return redirect(url_for('question_page'))
+
 
 if __name__ == '__main__':
     app.run(debug=True)
