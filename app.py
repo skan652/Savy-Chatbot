@@ -9,7 +9,9 @@ engines = {}
 def init_session():
     if '_id' not in session:
         session['_id'] = str(len(engines) + 1)
-        session['answers'] = []  # 🔹 store history
+
+    if 'answers' not in session:
+        session['answers'] = []
 
 
 def build_engine_from_history():
@@ -153,26 +155,22 @@ def question_page():
 # 🔹 Answer
 @app.route('/answer', methods=['POST'])
 def answer():
-    # 🔹 Ensure session is initialized
     init_session()
-
-    # 🔹 Ensure answers list exists (extra safety)
-    if 'answers' not in session:
-        session['answers'] = []
 
     answer_value = request.form.get('answer')
     engine = get_engine()
-
     current_q = engine.get_current_question()
 
-    # Convert types
     if current_q['type'] == 'boolean':
         answer_value = answer_value == 'true'
     elif current_q['type'] == 'number':
         answer_value = float(answer_value)
 
-    # 🔹 Store answer safely
-    session['answers'].append(answer_value)
+    answers = session.get('answers', [])
+    answers.append(answer_value)
+    session['answers'] = answers  # 🔹 reassign (IMPORTANT)
+
+    session.modified = True  # 🔥 force Flask to save session
 
     engine.answer_question(answer_value)
 
@@ -182,10 +180,16 @@ def answer():
 # 🔹 BACK BUTTON LOGIC
 @app.route('/back', methods=['POST'])
 def go_back():
-    if session.get('answers'):
-        session['answers'].pop()  # remove last answer
+    init_session()
 
-    # 🔹 rebuild engine from remaining answers
+    answers = session.get('answers', [])
+
+    if answers:
+        answers.pop()
+
+    session['answers'] = answers  # 🔹 reassign
+    session.modified = True       # 🔥 force save
+
     build_engine_from_history()
 
     return redirect(url_for('question_page'))
