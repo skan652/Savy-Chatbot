@@ -1,228 +1,586 @@
-from flask import Flask, request, redirect, url_for, render_template_string, session
-from state_machine import StateMachineEngine
+from flask import Flask, request, redirect, url_for
+from flask import render_template_string, session
+import json
+
+# =========================================================
+# FLASK APP
+# =========================================================
 
 app = Flask(__name__)
-app.secret_key = 'savy-chatbot-secret-key'
+app.secret_key = "savy-chatbot-secret-key"
 
-engines = {}
+# =========================================================
+# LOAD QUESTIONS
+# =========================================================
+
+with open("response.json", "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+QUESTIONS = data["questions"]
+
+QUESTION_MAP = {
+    q["ref"]: q for q in QUESTIONS
+}
+
+QUESTION_ORDER = [
+    q["ref"] for q in QUESTIONS
+]
+
+# =========================================================
+# SESSION INIT
+# =========================================================
 
 def init_session():
-    if '_id' not in session:
-        session['_id'] = str(len(engines) + 1)
 
-    if 'answers' not in session:
-        session['answers'] = []
+    # SAFETY RESET
+    if (
+        "answers" not in session
+        or not isinstance(session["answers"], dict)
+    ):
+        session["answers"] = {}
 
+    if (
+        "history" not in session
+        or not isinstance(session["history"], list)
+    ):
+        session["history"] = []
 
-def build_engine_from_history():
-    """Rebuild engine from stored answers"""
-    session_id = session['_id']
+    if "current_ref" not in session:
 
-    engine = StateMachineEngine('response.json')
+        session["current_ref"] = QUESTIONS[0]["ref"]
 
-    for ans in session.get('answers', []):
-        engine.answer_question(ans)
+# =========================================================
+# GET QUESTION
+# =========================================================
 
-    engines[session_id] = engine
-    return engine
+def get_question(ref):
 
+    return QUESTION_MAP.get(ref)
 
-def get_engine():
-    init_session()
-    session_id = session['_id']
+# =========================================================
+# CLEAN NUMBERS
+# =========================================================
 
-    if session_id not in engines:
-        return build_engine_from_history()
+def clean_number(value):
 
-    return engines[session_id]
+    if value is None:
+        return None
 
+    value = (
+        str(value)
+        .replace(",", "")
+        .replace("£", "")
+        .strip()
+    )
 
-# 🔹 Home
-@app.route('/')
-def index():
-    return redirect(url_for('question_page'))
+    return value
 
+# =========================================================
+# NEXT QUESTION LOGIC
+# =========================================================
 
-# 🔹 Question Page
-@app.route('/question')
+def process_answer(question, answer):
+
+    q_type = question.get("type")
+
+    # -----------------------------------------------------
+    # VALIDATION
+    # -----------------------------------------------------
+
+    if question.get("required"):
+
+        if answer is None or answer == "":
+            return {
+                "status": "error",
+                "message": "This question is required."
+            }
+
+    # -----------------------------------------------------
+    # NUMBER VALIDATION
+    # -----------------------------------------------------
+
+    if q_type in ["numeric", "number", "price", "counter"]:
+
+        answer = clean_number(answer)
+
+        try:
+            float(answer)
+
+        except:
+            return {
+                "status": "error",
+                "message": "Please enter a valid number."
+            }
+
+    # -----------------------------------------------------
+    # HANDLER NEXT
+    # -----------------------------------------------------
+
+    handler_next = question.get("handlerNext")
+
+    if handler_next:
+
+        next_config = handler_next.get(str(answer))
+
+        if next_config:
+
+            action = next_config.get("action")
+
+            # OPEN QUESTION
+            if action == "open_question":
+
+                return {
+                    "status": "success",
+                    "next_ref": next_config.get("ref")
+                }
+
+            # COMPLETE FLOW
+            if action in [
+                "navigate_to_screen",
+                "to_save_and_finish_with_error"
+            ]:
+
+                return {
+                    "status": "completed"
+                }
+
+    # -----------------------------------------------------
+    # DEFAULT NEXT QUESTION
+    # -----------------------------------------------------
+
+    current_ref = question["ref"]
+
+    idx = QUESTION_ORDER.index(current_ref)
+
+    next_idx = idx + 1
+
+    if next_idx >= len(QUESTION_ORDER):
+
+        return {
+            "status": "completed"
+        }
+
+    return {
+        "status": "success",
+        "next_ref": QUESTION_ORDER[next_idx]
+    }
+
+# =========================================================
+# HOME
+# =========================================================
+
+@app.route("/")
+def home():
+
+    return redirect(url_for("question_page"))
+
+# =========================================================
+# QUESTION PAGE
+# =========================================================
+
+@app.route("/question")
 def question_page():
-    engine = get_engine()
-    question = engine.get_current_question()
+
+    init_session()
+
+    current_ref = session["current_ref"]
+
+    question = get_question(current_ref)
 
     if not question:
-        return redirect(url_for('completed'))
+        return redirect(url_for("completed"))
+
+    error_message = session.pop("error_message", None)
 
     return render_template_string("""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Questionnaire</title>
-        <style>
-            body {
-                font-family: Arial;
-                background: linear-gradient(135deg, #667eea, #764ba2);
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                height: 100vh;
-            }
 
-            .container {
-                background: white;
-                padding: 30px;
-                border-radius: 15px;
-                width: 400px;
-                text-align: center;
-                box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-            }
+<!DOCTYPE html>
 
-            h2 {
-                margin-bottom: 20px;
-            }
+<html>
 
-            button {
-                width: 100%;
-                padding: 10px;
-                margin: 8px 0;
-                border: none;
-                border-radius: 8px;
-                background: #667eea;
-                color: white;
-                cursor: pointer;
-            }
+<head>
 
-            button:hover {
-                background: #5a67d8;
-            }
+<title>Questionnaire</title>
 
-            .back-btn {
-                background: #ccc;
-                color: black;
-            }
+<style>
 
-            .back-btn:hover {
-                background: #bbb;
-            }
+body{
+    font-family:Arial;
+    background:#f5f5f5;
+    padding:40px;
+}
 
-            input {
-                width: 100%;
-                padding: 10px;
-                margin-top: 10px;
-                border-radius: 8px;
-                border: 1px solid #ccc;
-            }
-        </style>
-    </head>
-    <body>
+.container{
+    background:white;
+    max-width:700px;
+    margin:auto;
+    padding:30px;
+    border-radius:12px;
+}
 
-        <div class="container">
-            <h2>{{ question.question }}</h2>
+.progress{
+    color:#666;
+    margin-bottom:20px;
+}
 
-            <form method="POST" action="/answer">
+.info{
+    background:#eef2ff;
+    padding:15px;
+    border-radius:10px;
+    margin-bottom:20px;
+}
 
-                {% if question.type == 'single_choice' %}
-                    {% for opt in question.options %}
-                        <button type="submit" name="answer" value="{{ opt }}">{{ opt }}</button>
-                    {% endfor %}
+.error{
+    background:#ffdddd;
+    padding:15px;
+    border-radius:10px;
+    margin-bottom:20px;
+    color:#b00020;
+}
 
-                {% elif question.type == 'boolean' %}
-                    <button type="submit" name="answer" value="true">Yes</button>
-                    <button type="submit" name="answer" value="false">No</button>
+.option{
+    border:1px solid #ddd;
+    border-radius:10px;
+    padding:15px;
+    margin-top:10px;
+}
 
-                {% elif question.type == 'number' %}
-                    <input type="number" name="answer" required>
-                    <button type="submit">Submit</button>
+.option:hover{
+    background:#f8f8f8;
+}
 
-                {% else %}
-                    <input type="text" name="answer" required>
-                    <button type="submit">Submit</button>
+button{
+    width:100%;
+    padding:15px;
+    margin-top:20px;
+    border:none;
+    border-radius:10px;
+    background:#667eea;
+    color:white;
+    font-size:16px;
+    cursor:pointer;
+}
 
-                {% endif %}
-            </form>
+button:hover{
+    background:#5a67d8;
+}
 
-            {% if session.answers|length > 0 %}
-                <form method="POST" action="/back">
-                    <button class="back-btn">⬅ Back</button>
-                </form>
-            {% endif %}
+.back-btn{
+    background:#ccc;
+    color:black;
+}
+
+input[type=text]{
+    width:100%;
+    padding:15px;
+    margin-top:20px;
+    border-radius:10px;
+    border:1px solid #ccc;
+    box-sizing:border-box;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+    <div class="progress">
+        Progress: {{ question.progress }}%
+    </div>
+
+    {% if error_message %}
+        <div class="error">
+            {{ error_message }}
         </div>
+    {% endif %}
 
-    </body>
-    </html>
-    """, question=question)
+    <h1>{{ question.title }}</h1>
 
+    {% if question.infoTitle %}
+        <div class="info">
 
-# 🔹 Answer
-@app.route('/answer', methods=['POST'])
+            <strong>
+                {{ question.infoTitle }}
+            </strong>
+
+            <br><br>
+
+            {{ question.info }}
+
+        </div>
+    {% endif %}
+
+    <form method="POST" action="/answer">
+
+    {% if question.type in ['radiov2','radio','single_choice'] %}
+
+        {% for opt in question.options %}
+
+            <div class="option">
+
+                <label>
+
+                    <input
+                        type="radio"
+                        name="answer"
+                        value="{{ opt }}"
+                        required
+                    >
+
+                    {{ opt }}
+
+                </label>
+
+            </div>
+
+        {% endfor %}
+
+        <button type="submit">
+            Next
+        </button>
+
+    {% elif question.type in ['numeric','number','price','counter'] %}
+
+        <input
+            type="text"
+            name="answer"
+            placeholder="{{ question.placeholder }}"
+            required
+        >
+
+        <button type="submit">
+            Next
+        </button>
+
+    {% else %}
+
+        <input
+            type="text"
+            name="answer"
+            required
+        >
+
+        <button type="submit">
+            Next
+        </button>
+
+    {% endif %}
+
+    </form>
+
+    {% if session.history|length > 0 %}
+
+        <form method="POST" action="/back">
+
+            <button
+                type="submit"
+                class="back-btn"
+            >
+                ⬅ Back
+            </button>
+
+        </form>
+
+    {% endif %}
+
+</div>
+
+</body>
+
+</html>
+
+""",
+    question=question,
+    session=session,
+    error_message=error_message
+    )
+
+# =========================================================
+# ANSWER
+# =========================================================
+
+@app.route("/answer", methods=["POST"])
 def answer():
+
     init_session()
 
-    answer_value = request.form.get('answer')
-    engine = get_engine()
-    current_q = engine.get_current_question()
+    current_ref = session["current_ref"]
 
-    if current_q['type'] == 'boolean':
-        answer_value = answer_value == 'true'
-    elif current_q['type'] == 'number':
-        answer_value = float(answer_value)
+    question = get_question(current_ref)
 
-    answers = session.get('answers', [])
-    answers.append(answer_value)
-    session['answers'] = answers  # 🔹 reassign (IMPORTANT)
+    if not question:
+        return redirect(url_for("completed"))
 
-    session.modified = True  # 🔥 force Flask to save session
+    answer_value = request.form.get("answer")
 
-    engine.answer_question(answer_value)
+    # CLEAN NUMBERS
+    if question.get("type") in [
+        "numeric",
+        "number",
+        "price",
+        "counter"
+    ]:
+        answer_value = clean_number(answer_value)
 
-    return redirect(url_for('question_page'))
+    result = process_answer(
+        question,
+        answer_value
+    )
 
+    # -----------------------------------------------------
+    # ERROR
+    # -----------------------------------------------------
 
-# 🔹 BACK BUTTON LOGIC
-@app.route('/back', methods=['POST'])
-def go_back():
+    if result["status"] == "error":
+
+        session["error_message"] = result["message"]
+
+        return redirect(url_for("question_page"))
+
+    # -----------------------------------------------------
+    # SAVE ANSWER
+    # -----------------------------------------------------
+
+    answers = session["answers"]
+
+    answers[current_ref] = answer_value
+
+    session["answers"] = answers
+
+    # -----------------------------------------------------
+    # SAVE HISTORY
+    # -----------------------------------------------------
+
+    history = session["history"]
+
+    history.append(current_ref)
+
+    session["history"] = history
+
+    # -----------------------------------------------------
+    # COMPLETE
+    # -----------------------------------------------------
+
+    if result["status"] == "completed":
+
+        return redirect(url_for("completed"))
+
+    # -----------------------------------------------------
+    # NEXT QUESTION
+    # -----------------------------------------------------
+
+    session["current_ref"] = result["next_ref"]
+
+    return redirect(url_for("question_page"))
+
+# =========================================================
+# BACK
+# =========================================================
+
+@app.route("/back", methods=["POST"])
+def back():
+
     init_session()
 
-    answers = session.get('answers', [])
+    history = session["history"]
 
-    if answers:
-        answers.pop()
+    if history:
 
-    session['answers'] = answers  # 🔹 reassign
-    session.modified = True       # 🔥 force save
+        current_ref = session["current_ref"]
 
-    build_engine_from_history()
+        # REMOVE CURRENT ANSWER
+        answers = session["answers"]
 
-    return redirect(url_for('question_page'))
+        if current_ref in answers:
+            del answers[current_ref]
 
+        session["answers"] = answers
 
-# 🔹 Completed
-@app.route('/completed')
+        # GO BACK
+        previous_ref = history.pop()
+
+        session["history"] = history
+
+        session["current_ref"] = previous_ref
+
+    return redirect(url_for("question_page"))
+
+# =========================================================
+# COMPLETED
+# =========================================================
+
+@app.route("/completed")
 def completed():
-    return """
-    <html>
-    <body style="text-align:center; font-family:Arial; margin-top:50px;">
-        <h1>✅ Questionnaire Completed!</h1>
-        <br>
-        <a href="/restart">
-            <button style="padding:10px 20px;">Restart</button>
-        </a>
-    </body>
-    </html>
-    """
 
+    answers = session.get("answers", {})
 
-# 🔹 Restart
-@app.route('/restart')
+    formatted_answers = ""
+
+    for k, v in answers.items():
+
+        formatted_answers += f"<p><strong>{k}</strong>: {v}</p>"
+
+    return f"""
+
+<html>
+
+<body style='font-family:Arial;padding:40px;'>
+
+<h1>
+    ✅ Questionnaire Completed
+</h1>
+
+<h2>
+    Answers
+</h2>
+
+{formatted_answers}
+
+<br><br>
+
+<a href='/restart'>
+
+<button
+style='
+padding:15px;
+border:none;
+background:#667eea;
+color:white;
+border-radius:10px;
+cursor:pointer;
+'
+>
+
+Restart
+
+</button>
+
+</a>
+
+</body>
+
+</html>
+
+"""
+
+# =========================================================
+# RESTART
+# =========================================================
+
+@app.route("/restart")
 def restart():
-    session_id = session.get('_id')
-
-    if session_id in engines:
-        del engines[session_id]
 
     session.clear()
 
-    return redirect(url_for('question_page'))
+    return redirect(url_for("home"))
 
+# =========================================================
+# RUN
+# =========================================================
 
-if __name__ == '__main__':
+if __name__ == "__main__":
+
     app.run(debug=True)
