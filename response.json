@@ -80,28 +80,6 @@
       }
     },
     {
-      "ref": "22",
-      "progress": 10,
-      "title": "Did you earn more than £14,000 in any of the last 4 tax years?",
-      "type": "radiov2",
-      "field_name": "earnedMoreThan14kInLast4TaxYears",
-      "name": "q_23",
-      "options": ["Yes", "No"],
-      "required": true,
-      "infoTitle": "Did you earn more money in past tax years?",
-      "info": "You could qualify for a tax refund if you earned more than £14,000 in any of the last four tax years.",
-      "value": "",
-      "handlerNext": {
-        "No": {
-          "action": "to_save_and_finish_with_error"
-        },
-        "Yes": {
-          "action": "open_question",
-          "ref": "12"
-        }
-      }
-    },
-    {
       "ref": "4",
       "progress": 20,
       "title": "How many miles do you drive a year?",
@@ -271,19 +249,19 @@
       "handlerNext": {
         "No, I pay for it and don't get anything back from my employer": {
           "action": "open_question",
-          "ref": "10"
+          "ref": "12"
         },
         "Yes, I pay for it but can claim some of it back from my employer": {
           "action": "open_question",
-          "ref": "9"
+          "ref": "12"
         },
         "Yes, I pay for it but can claim all of it back from my employer": {
           "action": "open_question",
-          "ref": "9"
+          "ref": "12"
         },
         "Yes, I have a company credit card": {
           "action": "open_question",
-          "ref": "9"
+          "ref": "12"
         }
       }
     },
@@ -300,6 +278,27 @@
       "infoTitle": "Estimate your spend",
       "info": "It might not be the same every day, just give us an average for now.",
       "value": ""
+    },
+    {
+      "ref": "13",
+      "progress": 99,
+      "title": "Did you earn more than £14,000 in any of the last 4 tax years?",
+      "type": "radiov2",
+      "field_name": "earnedMoreThan14kInLast4TaxYears",
+      "name": "q_13",
+      "options": ["Yes", "No"],
+      "required": true,
+      "infoTitle": "Did you earn more money in past tax years?",
+      "info": "You could qualify for a tax refund if you earned more than £14,000 in any of the last four tax years.",
+      "value": "",
+      "handlerNext": {
+        "No": {
+          "action": "to_save_and_finish_with_error"
+        },
+        "Yes": {
+          "action": "to_save_and_finish"
+        }
+      }
     }
   ]
 }

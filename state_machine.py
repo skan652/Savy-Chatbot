@@ -134,7 +134,8 @@ class StateMachineEngine:
                 # END FLOW
                 if action in [
                     "navigate_to_screen",
-                    "to_save_and_finish_with_error"
+                    "to_save_and_finish_with_error",
+                    "to_save_and_finish"
                 ]:
 
                     return {
