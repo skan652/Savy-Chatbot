@@ -578,6 +578,19 @@ input[type="text"]:focus {
     border-color: #667eea;
     box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
 }
+.submit-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.validation-error {
+    color: #d63031;
+    font-size: 0.9em;
+    margin-top: 8px;
+    display: none;
+}
+.validation-error.show {
+    display: block;
+}
 
 </style>
 
@@ -615,7 +628,7 @@ input[type="text"]:focus {
         </div>
     {% endif %}
 
-    <form method="POST" action="/answer">
+    <form method="POST" action="/answer" onsubmit="return validateForm(event)">
 
     {% if question.type in ['radiov2','radio','single_choice'] %}
 
@@ -643,10 +656,12 @@ input[type="text"]:focus {
 
     {% elif question.type in ['numeric','number','price','counter'] %}
 
-        <input type="text" name="answer" placeholder="{{ question.placeholder }}" required>
-        <button type="submit" class="submit-btn">Next →</button>
+        <input type="text" id="numericInput" name="answer" placeholder="{{ question.placeholder }}" required oninput="validateNumericInput()">
+        <div id="validationError" class="validation-error">⚠️ Please enter a valid number</div>
+        <button type="submit" id="submitBtn" class="submit-btn">Next →</button>
 
     {% else %}
+
 
         <input type="text" name="answer" required>
         <button type="submit" class="submit-btn">Next →</button>
@@ -666,6 +681,59 @@ input[type="text"]:focus {
     {% endif %}
 
 </div>
+
+<script>
+function validateNumericInput() {
+    const input = document.getElementById('numericInput');
+    const errorMsg = document.getElementById('validationError');
+    const submitBtn = document.getElementById('submitBtn');
+    
+    if (!input || !errorMsg || !submitBtn) return;
+    
+    const value = input.value.trim();
+    const cleanedValue = value.replace(/,/g, '').replace(/£/g, '').trim();
+    
+    // Check if it's a valid number
+    const isValidNumber = cleanedValue !== '' && !isNaN(cleanedValue) && cleanedValue !== '0' || cleanedValue === '0';
+    
+    if (value === '') {
+        errorMsg.classList.remove('show');
+        submitBtn.disabled = true;
+    } else if (!isValidNumber || isNaN(parseFloat(cleanedValue))) {
+        errorMsg.classList.add('show');
+        submitBtn.disabled = true;
+    } else {
+        errorMsg.classList.remove('show');
+        submitBtn.disabled = false;
+    }
+}
+
+function validateForm(event) {
+    const input = document.getElementById('numericInput');
+    
+    // If this is a numeric question
+    if (input) {
+        const value = input.value.trim();
+        const cleanedValue = value.replace(/,/g, '').replace(/£/g, '').trim();
+        
+        // Check if it's a valid number
+        if (value === '' || isNaN(cleanedValue) || cleanedValue === '') {
+            event.preventDefault();
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+// Initialize validation on page load
+document.addEventListener('DOMContentLoaded', function() {
+    const input = document.getElementById('numericInput');
+    if (input) {
+        validateNumericInput();
+    }
+});
+</script>
 
 </body>
 
