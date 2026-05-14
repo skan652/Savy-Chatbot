@@ -11,6 +11,12 @@ app = Flask(__name__)
 app.secret_key = "savy-chatbot-secret-key"
 
 # =========================================================
+# PASSKEY CONFIGURATION
+# =========================================================
+
+VALID_PASSKEYS = ["12345", "pass123"]  # Set your valid passkeys here
+
+# =========================================================
 # LOAD QUESTIONS
 # =========================================================
 
@@ -65,6 +71,9 @@ def init_session():
 
     if "phase_index" not in session:
         session["phase_index"] = 0
+
+    if "passkey_verified" not in session:
+        session["passkey_verified"] = False
 
 # =========================================================
 # GET QUESTION
@@ -140,6 +149,12 @@ def process_answer(current_ref, answer):
 @app.route("/")
 def home():
 
+    init_session()
+
+    # Check if passkey is verified
+    if not session.get("passkey_verified", False):
+        return redirect(url_for("passkey_page"))
+
     return render_template_string("""
 <!DOCTYPE html>
 <html lang="en">
@@ -214,6 +229,159 @@ p {
 </html>
 """)
 
+
+# =========================================================
+# PASSKEY PAGE
+# =========================================================
+
+@app.route("/passkey")
+def passkey_page():
+
+    error_message = session.pop("passkey_error", None)
+
+    return render_template_string("""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Enter Passkey - Tax Refund Eligibility Chatbot</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+* { box-sizing: border-box; }
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    margin: 0;
+    padding: 20px;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.container {
+    background: white;
+    max-width: 600px;
+    width: 100%;
+    padding: 40px;
+    border-radius: 20px;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+    text-align: center;
+    animation: fadeIn 0.5s ease-in;
+}
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+h1 {
+    color: #333;
+    margin-bottom: 10px;
+    font-size: 2em;
+    font-weight: 300;
+}
+.subtitle {
+    color: #666;
+    margin-bottom: 30px;
+    font-size: 0.95em;
+}
+.error {
+    background: #fff2f2;
+    padding: 15px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    color: #d63031;
+    border-left: 4px solid #d63031;
+}
+.form-group {
+    margin-bottom: 20px;
+}
+label {
+    display: block;
+    text-align: left;
+    color: #333;
+    margin-bottom: 8px;
+    font-weight: 500;
+}
+input[type="password"] {
+    width: 100%;
+    padding: 15px;
+    border: 2px solid #e0e0e0;
+    border-radius: 12px;
+    font-size: 1em;
+    transition: border-color 0.3s ease;
+}
+input[type="password"]:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+.submit-btn {
+    width: 100%;
+    padding: 15px;
+    background: linear-gradient(45deg, #667eea, #764ba2);
+    color: white;
+    border: none;
+    border-radius: 12px;
+    font-size: 1.1em;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+}
+.submit-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+}
+.submit-btn:active {
+    transform: translateY(0);
+}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>🔐 Access Required</h1>
+<p class="subtitle">Please enter the passkey to access the assessment</p>
+
+{% if error_message %}
+    <div class="error">
+        ⚠️ {{ error_message }}
+    </div>
+{% endif %}
+
+<form method="POST" action="/verify_passkey">
+    <div class="form-group">
+        <label for="passkey">Passkey</label>
+        <input 
+            type="password" 
+            id="passkey" 
+            name="passkey" 
+            placeholder="Enter your passkey"
+            required
+            autofocus
+        >
+    </div>
+    <button type="submit" class="submit-btn">Verify & Continue →</button>
+</form>
+</div>
+</body>
+</html>
+""",
+    error_message=error_message
+    )
+
+# =========================================================
+# VERIFY PASSKEY
+# =========================================================
+
+@app.route("/verify_passkey", methods=["POST"])
+def verify_passkey():
+
+    passkey = request.form.get("passkey", "").strip()
+
+    if passkey in VALID_PASSKEYS:
+        session["passkey_verified"] = True
+        return redirect(url_for("home"))
+    else:
+        session["passkey_error"] = "Invalid passkey. Please try again."
+        return redirect(url_for("passkey_page"))
+
 # =========================================================
 # START
 # =========================================================
@@ -222,6 +390,10 @@ p {
 def start():
 
     init_session()
+
+    # Verify passkey before starting
+    if not session.get("passkey_verified", False):
+        return redirect(url_for("passkey_page"))
 
     return redirect(url_for("question_page"))
 
@@ -233,6 +405,10 @@ def start():
 def question_page():
 
     init_session()
+
+    # Verify passkey before showing question
+    if not session.get("passkey_verified", False):
+        return redirect(url_for("passkey_page"))
 
     phase = session["phase"]
     phase_index = session["phase_index"]
@@ -874,7 +1050,7 @@ def restart():
 
     session.clear()
 
-    return redirect(url_for("home"))
+    return redirect(url_for("passkey_page"))
 
 # =========================================================
 # RUN
