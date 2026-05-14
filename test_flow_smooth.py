@@ -30,15 +30,16 @@ answers_provided = {}
 test_answers = {
     "1": "Between £14k & £50k",      # Answer for income question
     "2": "Yes",                       # Answer for travel for work
-    "3": "My vehicle",               # Answer for how do you make journeys
+    "3": "Company vehicle",           # Answer for how do you make journeys
     "4": "8000",                      # Miles per year
     "5": "Mileage rate",             # Mileage payment type
     "6": "I travel to multiple places as part of my job",  # Type of work journeys
     "8": "Yes",                       # Do you buy food and drink
     "9": "3",                         # Days per week
-    "10": "15",                       # Spend per day
-    "11": "No, I pay for it and don't get anything back from my employer",  # Employer covers
-    "12": "0",                        # Reimbursed per day
+    "10": "122",                      # Spend per day
+    "11": "Yes, I pay for it but can claim all of it back from my employer",  # Employer covers
+    "12": "5",                        # Reimbursed per day
+    "13": "Yes",                      # Earned more than 14k in last 4 years
     "22": "Yes",                      # Earned more than 14k in last 4 years
 }
 

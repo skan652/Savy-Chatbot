@@ -1,4 +1,4 @@
-from flask import Flask, request, redirect, url_for
+from flask import Flask, request, redirect, url_for, jsonify
 from flask import render_template_string, session
 import json
 
@@ -402,6 +402,33 @@ input[type=text]{
 # ANSWER
 # =========================================================
 
+# =========================================================
+# GET CURRENT QUESTION (API)
+
+@app.route("/get_question")
+def get_question_api():
+
+    init_session()
+
+    current_ref = session["current_ref"]
+    question = get_question(current_ref)
+
+    if not question:
+        return jsonify({
+            "status": "completed",
+            "message": "No current question",
+            "current_ref": current_ref
+        })
+
+    return jsonify({
+        "status": "success",
+        "current_ref": current_ref,
+        "question": question
+    })
+
+# =========================================================
+# ANSWER
+
 @app.route("/answer", methods=["POST"])
 def answer():
 
@@ -414,7 +441,11 @@ def answer():
     if not question:
         return redirect(url_for("completed"))
 
-    answer_value = request.form.get("answer")
+    if request.is_json:
+        payload = request.get_json(silent=True) or {}
+        answer_value = payload.get("answer")
+    else:
+        answer_value = request.form.get("answer")
 
     # CLEAN NUMBERS
     if question.get("type") in [
@@ -435,6 +466,12 @@ def answer():
     # -----------------------------------------------------
 
     if result["status"] == "error":
+
+        if request.is_json:
+            return jsonify({
+                "status": "error",
+                "message": result["message"]
+            }), 400
 
         session["error_message"] = result["message"]
 
@@ -519,9 +556,9 @@ def completed():
 
     formatted_answers = ""
 
-    for k, v in answers.items():
-
-        formatted_answers += f"<p><strong>{k}</strong>: {v}</p>"
+    for ref in QUESTION_ORDER:
+        if ref in answers:
+            formatted_answers += f"<p><strong>{ref}</strong>: {answers[ref]}</p>"
 
     return f"""
 
