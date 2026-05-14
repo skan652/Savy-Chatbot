@@ -299,6 +299,29 @@
           "action": "to_save_and_finish"
         }
       }
+    },
+    {
+      "ref": "14",
+      "progress": 100,
+      "title": "Do you have any other sources of income?",
+      "type": "radiov2",
+      "field_name": "otherIncome",
+      "name": "q_14",
+      "options": ["Yes", "No"],
+      "required": true,
+      "value": ""
+    },
+    {
+      "ref": "15",
+      "progress": 100,
+      "title": "How much do you spend on commuting per month?",
+      "type": "price",
+      "field_name": "commutingSpend",
+      "name": "q_15",
+      "required": true,
+      "subTitle": "Spend per month",
+      "placeholder": "Ex - £50",
+      "value": ""
     }
   ]
 }

@@ -26,6 +26,11 @@ QUESTION_ORDER = [
     q["ref"] for q in QUESTIONS
 ]
 
+PHASE_QUESTIONS = {
+    1: ['1','2','3','4','5','6','7','8'],  # tax refunds
+    2: ['9','10','11','12','13','14','15']  # tax savings
+}
+
 # =========================================================
 # SESSION INIT
 # =========================================================
@@ -46,8 +51,13 @@ def init_session():
         session["history"] = []
 
     if "current_ref" not in session:
+        session["current_ref"] = None
 
-        session["current_ref"] = QUESTIONS[0]["ref"]
+    if "phase" not in session:
+        session["phase"] = 1
+
+    if "phase_index" not in session:
+        session["phase_index"] = 0
 
 # =========================================================
 # GET QUESTION
@@ -113,57 +123,27 @@ def process_answer(question, answer):
             }
 
     # -----------------------------------------------------
-    # HANDLER NEXT
+    # PHASE LOGIC
     # -----------------------------------------------------
 
-    handler_next = question.get("handlerNext")
+    phase = session["phase"]
+    phase_index = session["phase_index"]
 
-    if handler_next:
-
-        next_config = handler_next.get(str(answer))
-
-        if next_config:
-
-            action = next_config.get("action")
-
-            # OPEN QUESTION
-            if action == "open_question":
-
-                return {
-                    "status": "success",
-                    "next_ref": next_config.get("ref")
-                }
-
-            # COMPLETE FLOW
-            if action in [
-                "navigate_to_screen",
-                "to_save_and_finish_with_error"
-            ]:
-
-                return {
-                    "status": "completed"
-                }
-
-    # -----------------------------------------------------
-    # DEFAULT NEXT QUESTION
-    # -----------------------------------------------------
-
-    current_ref = question["ref"]
-
-    idx = QUESTION_ORDER.index(current_ref)
-
-    next_idx = idx + 1
-
-    if next_idx >= len(QUESTION_ORDER):
-
+    if phase_index < len(PHASE_QUESTIONS[phase]) - 1:
+        next_index = phase_index + 1
         return {
-            "status": "completed"
+            "status": "success",
+            "next_index": next_index
         }
-
-    return {
-        "status": "success",
-        "next_ref": QUESTION_ORDER[next_idx]
-    }
+    else:
+        if phase == 1:
+            return {
+                "status": "phase_change"
+            }
+        else:
+            return {
+                "status": "completed"
+            }
 
 # =========================================================
 # HOME
@@ -171,6 +151,36 @@ def process_answer(question, answer):
 
 @app.route("/")
 def home():
+
+    return render_template_string("""
+<!DOCTYPE html>
+<html>
+<head>
+<title>Tax Refund Chatbot</title>
+<style>
+body{font-family:Arial;background:#f5f5f5;padding:40px;}
+.container{background:white;max-width:700px;margin:auto;padding:30px;border-radius:12px;text-align:center;}
+button{padding:15px;border:none;background:#667eea;color:white;border-radius:10px;cursor:pointer;font-size:16px;}
+button:hover{background:#5a67d8;}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Good morning, please answer to determine how eligible you are for a refund</h1>
+<a href='/start'><button>Start</button></a>
+</div>
+</body>
+</html>
+""")
+
+# =========================================================
+# START
+# =========================================================
+
+@app.route("/start")
+def start():
+
+    init_session()
 
     return redirect(url_for("question_page"))
 
@@ -183,7 +193,13 @@ def question_page():
 
     init_session()
 
-    current_ref = session["current_ref"]
+    phase = session["phase"]
+    phase_index = session["phase_index"]
+
+    if phase_index >= len(PHASE_QUESTIONS[phase]):
+        return redirect(url_for("completed"))
+
+    current_ref = PHASE_QUESTIONS[phase][phase_index]
 
     question = get_question(current_ref)
 
@@ -191,6 +207,8 @@ def question_page():
         return redirect(url_for("completed"))
 
     error_message = session.pop("error_message", None)
+
+    progress = int(((phase-1)*8 + phase_index + 1) / 15 * 100)
 
     return render_template_string("""
 
@@ -288,7 +306,7 @@ input[type=text]{
 <div class="container">
 
     <div class="progress">
-        Progress: {{ question.progress }}%
+        Progress: {{ progress }}%
     </div>
 
     {% if error_message %}
@@ -395,7 +413,8 @@ input[type=text]{
 """,
     question=question,
     session=session,
-    error_message=error_message
+    error_message=error_message,
+    progress=progress
     )
 
 # =========================================================
@@ -498,6 +517,17 @@ def answer():
     session["history"] = history
 
     # -----------------------------------------------------
+    # PHASE CHANGE
+    # -----------------------------------------------------
+
+    if result["status"] == "phase_change":
+
+        session["phase"] = 2
+        session["phase_index"] = 0
+
+        return redirect(url_for("phase_message"))
+
+    # -----------------------------------------------------
     # COMPLETE
     # -----------------------------------------------------
 
@@ -509,7 +539,7 @@ def answer():
     # NEXT QUESTION
     # -----------------------------------------------------
 
-    session["current_ref"] = result["next_ref"]
+    session["phase_index"] = result["next_index"]
 
     return redirect(url_for("question_page"))
 
@@ -546,6 +576,43 @@ def back():
     return redirect(url_for("question_page"))
 
 # =========================================================
+# PHASE MESSAGE
+# =========================================================
+
+@app.route("/phase_message")
+def phase_message():
+
+    return render_template_string("""
+<!DOCTYPE html>
+<html>
+<head>
+<title>Tax Refund Chatbot</title>
+<style>
+body{font-family:Arial;background:#f5f5f5;padding:40px;}
+.container{background:white;max-width:700px;margin:auto;padding:30px;border-radius:12px;text-align:center;}
+button{padding:15px;border:none;background:#667eea;color:white;border-radius:10px;cursor:pointer;font-size:16px;}
+button:hover{background:#5a67d8;}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Thank you, next step</h1>
+<a href='/continue'><button>Continue</button></a>
+</div>
+</body>
+</html>
+""")
+
+# =========================================================
+# CONTINUE
+# =========================================================
+
+@app.route("/continue")
+def continue_phase():
+
+    return redirect(url_for("question_page"))
+
+# =========================================================
 # COMPLETED
 # =========================================================
 
@@ -567,11 +634,11 @@ def completed():
 <body style='font-family:Arial;padding:40px;'>
 
 <h1>
-    ✅ Questionnaire Completed
+    Thank you for submitting!
 </h1>
 
 <h2>
-    Answers
+    Your Answers
 </h2>
 
 {formatted_answers}
