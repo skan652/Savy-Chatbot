@@ -1,6 +1,7 @@
 from flask import Flask, request, redirect, url_for, jsonify
 from flask import render_template_string, session
 import json
+from state_machine import StateMachineEngine
 
 # =========================================================
 # FLASK APP
@@ -26,6 +27,12 @@ QUESTION_ORDER = [
     q["ref"] for q in QUESTIONS
 ]
 
+# =========================================================
+# STATE MACHINE ENGINE
+# =========================================================
+
+engine = StateMachineEngine("response.json")
+
 PHASE_QUESTIONS = {
     1: ['1','2','3','4','5','6','7','8'],  # tax refunds
     2: ['9','10','11','12','13','14','15']  # tax savings
@@ -50,8 +57,8 @@ def init_session():
     ):
         session["history"] = []
 
-    if "current_ref" not in session:
-        session["current_ref"] = None
+    if "current_ref" not in session or session["current_ref"] is None:
+        session["current_ref"] = engine.get_first_question()["ref"]
 
     if "phase" not in session:
         session["phase"] = 1
@@ -89,61 +96,42 @@ def clean_number(value):
 # NEXT QUESTION LOGIC
 # =========================================================
 
-def process_answer(question, answer):
+def process_answer(current_ref, answer):
 
-    q_type = question.get("type")
+    result = engine.get_next_question_ref(current_ref, answer)
 
-    # -----------------------------------------------------
-    # VALIDATION
-    # -----------------------------------------------------
+    if result.get("status") == "error":
+        return result
 
-    if question.get("required"):
+    if result.get("status") == "completed":
+        return {"status": "completed"}
 
-        if answer is None or answer == "":
-            return {
-                "status": "error",
-                "message": "This question is required."
-            }
+    next_ref = result.get("next_ref")
 
-    # -----------------------------------------------------
-    # NUMBER VALIDATION
-    # -----------------------------------------------------
-
-    if q_type in ["numeric", "number", "price", "counter"]:
-
-        answer = clean_number(answer)
-
-        try:
-            float(answer)
-
-        except:
-            return {
-                "status": "error",
-                "message": "Please enter a valid number."
-            }
-
-    # -----------------------------------------------------
-    # PHASE LOGIC
-    # -----------------------------------------------------
-
+    # Check if next_ref is in current phase
     phase = session["phase"]
-    phase_index = session["phase_index"]
+    current_phase_questions = PHASE_QUESTIONS.get(phase, [])
 
-    if phase_index < len(PHASE_QUESTIONS[phase]) - 1:
-        next_index = phase_index + 1
+    if next_ref in current_phase_questions:
+        # Stay in same phase
+        next_index = current_phase_questions.index(next_ref)
         return {
             "status": "success",
             "next_index": next_index
         }
     else:
-        if phase == 1:
+        # Check if it's in next phase
+        next_phase = phase + 1
+        next_phase_questions = PHASE_QUESTIONS.get(next_phase, [])
+        if next_ref in next_phase_questions:
             return {
-                "status": "phase_change"
+                "status": "phase_change",
+                "next_phase": next_phase,
+                "next_index": next_phase_questions.index(next_ref)
             }
         else:
-            return {
-                "status": "completed"
-            }
+            # If not in next phase, assume completed or invalid
+            return {"status": "completed"}
 
 # =========================================================
 # HOME
@@ -154,20 +142,73 @@ def home():
 
     return render_template_string("""
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-<title>Tax Refund Chatbot</title>
+<title>Tax Refund Eligibility Chatbot</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
-body{font-family:Arial;background:#f5f5f5;padding:40px;}
-.container{background:white;max-width:700px;margin:auto;padding:30px;border-radius:12px;text-align:center;}
-button{padding:15px;border:none;background:#667eea;color:white;border-radius:10px;cursor:pointer;font-size:16px;}
-button:hover{background:#5a67d8;}
+* { box-sizing: border-box; }
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    margin: 0;
+    padding: 20px;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.container {
+    background: white;
+    max-width: 600px;
+    width: 100%;
+    padding: 40px;
+    border-radius: 20px;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+    text-align: center;
+    animation: fadeIn 0.5s ease-in;
+}
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+h1 {
+    color: #333;
+    margin-bottom: 20px;
+    font-size: 2.2em;
+    font-weight: 300;
+}
+p {
+    color: #666;
+    font-size: 1.1em;
+    margin-bottom: 30px;
+    line-height: 1.6;
+}
+.start-btn {
+    background: linear-gradient(45deg, #667eea, #764ba2);
+    color: white;
+    border: none;
+    padding: 15px 40px;
+    font-size: 1.2em;
+    border-radius: 50px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+}
+.start-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+}
+.start-btn:active {
+    transform: translateY(0);
+}
 </style>
 </head>
 <body>
 <div class="container">
-<h1>Good morning, please answer to determine how eligible you are for a refund</h1>
-<a href='/start'><button>Start</button></a>
+<h1>🌅 Good morning!</h1>
+<p>Please answer a few questions to determine how eligible you are for a tax refund.</p>
+<a href='/start'><button class="start-btn">Start Assessment →</button></a>
 </div>
 </body>
 </html>
@@ -208,7 +249,10 @@ def question_page():
 
     error_message = session.pop("error_message", None)
 
-    progress = int(((phase-1)*8 + phase_index + 1) / 15 * 100)
+    # Calculate progress based on phase
+    total_questions = sum(len(qs) for qs in PHASE_QUESTIONS.values())
+    current_question_index = sum(len(PHASE_QUESTIONS[p]) for p in range(1, phase)) + phase_index
+    progress = int((current_question_index + 1) / total_questions * 100)
 
     return render_template_string("""
 
@@ -222,79 +266,141 @@ def question_page():
 
 <style>
 
-body{
-    font-family:Arial;
-    background:#f5f5f5;
-    padding:40px;
+* { box-sizing: border-box; }
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    margin: 0;
+    padding: 20px;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
-
-.container{
-    background:white;
-    max-width:700px;
-    margin:auto;
-    padding:30px;
-    border-radius:12px;
+.container {
+    background: white;
+    max-width: 700px;
+    width: 100%;
+    padding: 30px;
+    border-radius: 20px;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+    animation: fadeIn 0.5s ease-in;
 }
-
-.progress{
-    color:#666;
-    margin-bottom:20px;
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
 }
-
-.info{
-    background:#eef2ff;
-    padding:15px;
-    border-radius:10px;
-    margin-bottom:20px;
+.progress-container {
+    margin-bottom: 30px;
 }
-
-.error{
-    background:#ffdddd;
-    padding:15px;
-    border-radius:10px;
-    margin-bottom:20px;
-    color:#b00020;
+.progress-bar {
+    width: 100%;
+    height: 8px;
+    background: #e0e0e0;
+    border-radius: 4px;
+    overflow: hidden;
 }
-
-.option{
-    border:1px solid #ddd;
-    border-radius:10px;
-    padding:15px;
-    margin-top:10px;
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(45deg, #667eea, #764ba2);
+    border-radius: 4px;
+    transition: width 0.3s ease;
 }
-
-.option:hover{
-    background:#f8f8f8;
+.progress-text {
+    text-align: center;
+    margin-top: 10px;
+    color: #666;
+    font-size: 0.9em;
 }
-
-button{
-    width:100%;
-    padding:15px;
-    margin-top:20px;
-    border:none;
-    border-radius:10px;
-    background:#667eea;
-    color:white;
-    font-size:16px;
-    cursor:pointer;
+.info {
+    background: #f8f9ff;
+    padding: 20px;
+    border-radius: 12px;
+    margin-bottom: 25px;
+    border-left: 4px solid #667eea;
 }
-
-button:hover{
-    background:#5a67d8;
+.info strong {
+    color: #333;
 }
-
-.back-btn{
-    background:#ccc;
-    color:black;
+.error {
+    background: #fff2f2;
+    padding: 15px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    color: #d63031;
+    border-left: 4px solid #d63031;
 }
-
-input[type=text]{
-    width:100%;
-    padding:15px;
-    margin-top:20px;
-    border-radius:10px;
-    border:1px solid #ccc;
-    box-sizing:border-box;
+h1 {
+    color: #333;
+    margin-bottom: 15px;
+    font-size: 1.8em;
+    font-weight: 400;
+}
+.option {
+    border: 2px solid #e0e0e0;
+    border-radius: 12px;
+    padding: 15px;
+    margin-top: 10px;
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+.option:hover {
+    border-color: #667eea;
+    background: #f8f9ff;
+    transform: translateY(-2px);
+}
+.option input[type="radio"] {
+    margin-right: 10px;
+    accent-color: #667eea;
+}
+.submit-btn {
+    width: 100%;
+    padding: 15px;
+    margin-top: 25px;
+    border: none;
+    border-radius: 12px;
+    background: linear-gradient(45deg, #667eea, #764ba2);
+    color: white;
+    font-size: 1.1em;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+}
+.submit-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+}
+.submit-btn:active {
+    transform: translateY(0);
+}
+.back-btn {
+    background: #f1f1f1;
+    color: #666;
+    border: 2px solid #e0e0e0;
+    margin-top: 15px;
+    width: 100%;
+    padding: 12px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+.back-btn:hover {
+    background: #e8e8e8;
+    border-color: #ccc;
+}
+input[type="text"] {
+    width: 100%;
+    padding: 15px;
+    margin-top: 15px;
+    border-radius: 12px;
+    border: 2px solid #e0e0e0;
+    font-size: 1em;
+    transition: border-color 0.3s ease;
+}
+input[type="text"]:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
 }
 
 </style>
@@ -304,14 +410,16 @@ input[type=text]{
 <body>
 
 <div class="container">
-
-    <div class="progress">
-        Progress: {{ progress }}%
+    <div class="progress-container">
+        <div class="progress-bar">
+            <div class="progress-fill" style="width: {{ progress }}%"></div>
+        </div>
+        <div class="progress-text">Progress: {{ progress }}%</div>
     </div>
 
     {% if error_message %}
         <div class="error">
-            {{ error_message }}
+            ⚠️ {{ error_message }}
         </div>
     {% endif %}
 
@@ -355,35 +463,17 @@ input[type=text]{
             </div>
 
         {% endfor %}
-
-        <button type="submit">
-            Next
-        </button>
+        <button type="submit" class="submit-btn">Next →</button>
 
     {% elif question.type in ['numeric','number','price','counter'] %}
 
-        <input
-            type="text"
-            name="answer"
-            placeholder="{{ question.placeholder }}"
-            required
-        >
-
-        <button type="submit">
-            Next
-        </button>
+        <input type="text" name="answer" placeholder="{{ question.placeholder }}" required>
+        <button type="submit" class="submit-btn">Next →</button>
 
     {% else %}
 
-        <input
-            type="text"
-            name="answer"
-            required
-        >
-
-        <button type="submit">
-            Next
-        </button>
+        <input type="text" name="answer" required>
+        <button type="submit" class="submit-btn">Next →</button>
 
     {% endif %}
 
@@ -393,12 +483,7 @@ input[type=text]{
 
         <form method="POST" action="/back">
 
-            <button
-                type="submit"
-                class="back-btn"
-            >
-                ⬅ Back
-            </button>
+            <button type="submit" class="back-btn">← Back</button>
 
         </form>
 
@@ -476,7 +561,7 @@ def answer():
         answer_value = clean_number(answer_value)
 
     result = process_answer(
-        question,
+        current_ref,
         answer_value
     )
 
@@ -522,8 +607,9 @@ def answer():
 
     if result["status"] == "phase_change":
 
-        session["phase"] = 2
-        session["phase_index"] = 0
+        session["phase"] = result["next_phase"]
+        session["phase_index"] = result["next_index"]
+        session["current_ref"] = PHASE_QUESTIONS[result["next_phase"]][result["next_index"]]
 
         return redirect(url_for("phase_message"))
 
@@ -540,6 +626,7 @@ def answer():
     # -----------------------------------------------------
 
     session["phase_index"] = result["next_index"]
+    session["current_ref"] = PHASE_QUESTIONS[session["phase"]][result["next_index"]]
 
     return redirect(url_for("question_page"))
 
@@ -573,6 +660,13 @@ def back():
 
         session["current_ref"] = previous_ref
 
+        # Update phase and phase_index
+        for ph, questions in PHASE_QUESTIONS.items():
+            if previous_ref in questions:
+                session["phase"] = ph
+                session["phase_index"] = questions.index(previous_ref)
+                break
+
     return redirect(url_for("question_page"))
 
 # =========================================================
@@ -584,20 +678,73 @@ def phase_message():
 
     return render_template_string("""
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <title>Tax Refund Chatbot</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
-body{font-family:Arial;background:#f5f5f5;padding:40px;}
-.container{background:white;max-width:700px;margin:auto;padding:30px;border-radius:12px;text-align:center;}
-button{padding:15px;border:none;background:#667eea;color:white;border-radius:10px;cursor:pointer;font-size:16px;}
-button:hover{background:#5a67d8;}
+* { box-sizing: border-box; }
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    margin: 0;
+    padding: 20px;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.container {
+    background: white;
+    max-width: 600px;
+    width: 100%;
+    padding: 40px;
+    border-radius: 20px;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+    text-align: center;
+    animation: fadeIn 0.5s ease-in;
+}
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+h1 {
+    color: #333;
+    margin-bottom: 20px;
+    font-size: 2.2em;
+    font-weight: 300;
+}
+p {
+    color: #666;
+    font-size: 1.1em;
+    margin-bottom: 30px;
+    line-height: 1.6;
+}
+.continue-btn {
+    background: linear-gradient(45deg, #667eea, #764ba2);
+    color: white;
+    border: none;
+    padding: 15px 40px;
+    font-size: 1.2em;
+    border-radius: 50px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+}
+.continue-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+}
+.continue-btn:active {
+    transform: translateY(0);
+}
 </style>
 </head>
 <body>
 <div class="container">
-<h1>Thank you, next step</h1>
-<a href='/continue'><button>Continue</button></a>
+<h1>✅ Thank you!</h1>
+<p>Now let's move to the next step: tax savings assessment.</p>
+<a href='/continue'><button class="continue-btn">Continue →</button></a>
 </div>
 </body>
 </html>
@@ -629,40 +776,88 @@ def completed():
 
     return f"""
 
-<html>
+<html lang="en">
 
-<body style='font-family:Arial;padding:40px;'>
+<head>
+<title>Assessment Complete</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+* {{ box-sizing: border-box; }}
+body {{
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    margin: 0;
+    padding: 20px;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}}
+.container {{
+    background: white;
+    max-width: 700px;
+    width: 100%;
+    padding: 40px;
+    border-radius: 20px;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+    text-align: center;
+    animation: fadeIn 0.5s ease-in;
+}}
+@keyframes fadeIn {{
+    from {{ opacity: 0; transform: translateY(20px); }}
+    to {{ opacity: 1; transform: translateY(0); }}
+}}
+h1 {{
+    color: #333;
+    margin-bottom: 20px;
+    font-size: 2.2em;
+    font-weight: 300;
+}}
+p {{
+    color: #666;
+    margin-bottom: 15px;
+    line-height: 1.6;
+    text-align: left;
+}}
+.restart-btn {{
+    background: linear-gradient(45deg, #667eea, #764ba2);
+    color: white;
+    border: none;
+    padding: 15px 40px;
+    font-size: 1.2em;
+    border-radius: 50px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+    margin-top: 20px;
+}}
+.restart-btn:hover {{
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+}}
+.restart-btn:active {{
+    transform: translateY(0);
+}}
+</style>
+</head>
 
-<h1>
-    Thank you for submitting!
-</h1>
+<body>
 
-<h2>
-    Your Answers
-</h2>
+<div class="container">
+
+<h1>🎉 Thank you for submitting!</h1>
+
+<p>Your assessment has been completed. Here are your answers:</p>
 
 {formatted_answers}
 
-<br><br>
-
 <a href='/restart'>
 
-<button
-style='
-padding:15px;
-border:none;
-background:#667eea;
-color:white;
-border-radius:10px;
-cursor:pointer;
-'
->
-
-Restart
-
-</button>
+<button class="restart-btn">Take Assessment Again →</button>
 
 </a>
+
+</div>
 
 </body>
 
