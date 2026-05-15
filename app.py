@@ -259,6 +259,11 @@ p {
 @app.route("/passkey")
 def passkey_page():
 
+    init_session()
+
+    if session.get("passkey_verified", False):
+        return redirect(url_for("welcome"))
+
     error_message = session.pop("passkey_error", None)
 
     return render_template_string("""
