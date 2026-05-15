@@ -153,14 +153,27 @@ def process_answer(current_ref, answer):
             return {"status": "completed"}
 
 # =========================================================
-# HOME
+# ROOT
 # =========================================================
 
 @app.route("/")
-def home():
+def index():
     init_session()
 
     # ALWAYS force passkey first
+    if not session.get("passkey_verified", False):
+        return redirect(url_for("passkey_page"))
+
+    return redirect(url_for("welcome"))
+
+# =========================================================
+# WELCOME PAGE
+# =========================================================
+
+@app.route("/welcome")
+def welcome():
+    init_session()
+
     if not session.get("passkey_verified", False):
         return redirect(url_for("passkey_page"))
 
@@ -386,7 +399,7 @@ def verify_passkey():
 
     if passkey in VALID_PASSKEYS:
         session["passkey_verified"] = True
-        return redirect(url_for("home"))
+        return redirect(url_for("welcome"))
     else:
         session["passkey_error"] = "Invalid passkey. Please try again."
         return redirect(url_for("passkey_page"))
