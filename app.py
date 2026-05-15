@@ -8,6 +8,16 @@ from state_machine import StateMachineEngine
 # =========================================================
 
 app = Flask(__name__)
+@app.before_request
+def require_passkey():
+    allowed_routes = ["passkey_page", "verify_passkey", "static"]
+
+    if request.endpoint in allowed_routes:
+        return
+
+    if not session.get("passkey_verified"):
+        return redirect(url_for("passkey_page"))
+    
 app.secret_key = "savy-chatbot-secret-key"
 
 # =========================================================
@@ -148,10 +158,9 @@ def process_answer(current_ref, answer):
 
 @app.route("/")
 def home():
-
     init_session()
 
-    # Check if passkey is verified
+    # ALWAYS force passkey first
     if not session.get("passkey_verified", False):
         return redirect(url_for("passkey_page"))
 
