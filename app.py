@@ -1,30 +1,16 @@
-from flask import Flask, request, redirect, url_for, jsonify
-from flask import render_template_string, session
+from flask import Flask, request, redirect, url_for, jsonify, session
+from flask import render_template_string
 import json
-from state_machine import StateMachineEngine
-
-# =========================================================
-# FLASK APP
-# =========================================================
+import re
 
 app = Flask(__name__)
-@app.before_request
-def require_passkey():
-    allowed_routes = ["passkey_page", "verify_passkey", "static"]
-
-    if request.endpoint in allowed_routes:
-        return
-
-    if not session.get("passkey_verified"):
-        return redirect(url_for("passkey_page"))
-    
 app.secret_key = "savy-chatbot-secret-key"
 
 # =========================================================
 # PASSKEY CONFIGURATION
 # =========================================================
 
-VALID_PASSKEYS = ["12345", "pass123"]  # Set your valid passkeys here
+VALID_PASSKEYS = ["12345", "pass123"]
 
 # =========================================================
 # LOAD QUESTIONS
@@ -35,1122 +21,912 @@ with open("response.json", "r", encoding="utf-8") as f:
 
 QUESTIONS = data["questions"]
 
-QUESTION_MAP = {
-    q["ref"]: q for q in QUESTIONS
-}
-
-QUESTION_ORDER = [
-    q["ref"] for q in QUESTIONS
-]
+QUESTION_MAP = {q["ref"]: q for q in QUESTIONS}
 
 # =========================================================
-# STATE MACHINE ENGINE
-# =========================================================
-
-engine = StateMachineEngine("response.json")
-
-PHASE_QUESTIONS = {
-    1: ['1','2','3','4','5','6','7','8'],  # tax refunds
-    2: ['9','10','11','12','13','14','15']  # tax savings
-}
-
-# =========================================================
-# SESSION INIT
+# HELPER FUNCTIONS
 # =========================================================
 
 def init_session():
-
-    # SAFETY RESET
-    if (
-        "answers" not in session
-        or not isinstance(session["answers"], dict)
-    ):
+    if "messages" not in session:
+        session["messages"] = []
+    if "answers" not in session:
         session["answers"] = {}
-
-    if (
-        "history" not in session
-        or not isinstance(session["history"], list)
-    ):
-        session["history"] = []
-
-    if "current_ref" not in session or session["current_ref"] is None:
-        session["current_ref"] = engine.get_first_question()["ref"]
-
-    if "phase" not in session:
-        session["phase"] = 1
-
-    if "phase_index" not in session:
-        session["phase_index"] = 0
-
+    if "current_ref" not in session:
+        session["current_ref"] = "1"
     if "passkey_verified" not in session:
         session["passkey_verified"] = False
-
-# =========================================================
-# GET QUESTION
-# =========================================================
+    if "waiting_for_answer" not in session:
+        session["waiting_for_answer"] = False
+    if "completed" not in session:
+        session["completed"] = False
+    if "history" not in session:
+        session["history"] = []
+    if "pending_proposal" not in session:
+        session["pending_proposal"] = None
 
 def get_question(ref):
-
-    return QUESTION_MAP.get(ref)
-
-# =========================================================
-# CLEAN NUMBERS
-# =========================================================
+    return QUESTION_MAP.get(str(ref))
 
 def clean_number(value):
-
     if value is None:
         return None
+    # Remove £, commas, spaces
+    cleaned = re.sub(r'[£,€$]', '', str(value))
+    cleaned = re.sub(r'[^\d.]', '', cleaned)
+    return cleaned
 
-    value = (
-        str(value)
-        .replace(",", "")
-        .replace("£", "")
-        .strip()
-    )
+def get_question_text(question):
+    """Get formatted question text"""
+    if not question:
+        return None
+    
+    text = question.get("title", "")
+    
+    if question.get("subTitle"):
+        text = f"{text}\n\n📊 **{question['subTitle']}**"
+    
+    if question.get("infoTitle") and question.get("info"):
+        text = f"{text}\n\nℹ️ **{question['infoTitle']}**\n{question['info']}"
+    
+    if question.get("placeholder"):
+        text = f"{text}\n\n💡 *Example: {question['placeholder']}*"
+    
+    return text
 
-    return value
+def get_options(question):
+    """Get options for a question"""
+    if question and question.get("type") in ['radiov2', 'radio', 'single_choice']:
+        # Clean up options (remove newlines)
+        options = question.get("options", [])
+        return [opt.replace('\n', ' ') for opt in options]
+    return None
 
-# =========================================================
-# NEXT QUESTION LOGIC
-# =========================================================
+def get_question_type(question):
+    """Get the input type for a question"""
+    if not question:
+        return "text"
+    
+    q_type = question.get("type", "text")
+    
+    if q_type in ['radiov2', 'radio', 'single_choice']:
+        return "choice"
+    elif q_type in ['numeric', 'number', 'price', 'counter']:
+        return "numeric"
+    else:
+        return "text"
 
-def process_answer(current_ref, answer):
-
-    result = engine.get_next_question_ref(current_ref, answer)
-
-    if result.get("status") == "error":
-        return result
-
-    if result.get("status") == "completed":
+def process_handler_next(current_ref, answer):
+    """Process the handlerNext logic from the JSON"""
+    question = get_question(current_ref)
+    if not question or "handlerNext" not in question:
+        # If no handler, just move to next sequential question
+        next_ref = str(int(current_ref) + 1)
+        if get_question(next_ref):
+            return {"status": "success", "next_ref": next_ref, "completed": False}
+        return {"status": "completed"}
+    
+    # Clean answer for matching (remove newlines, extra spaces)
+    clean_answer = answer.replace('\n', ' ').strip()
+    
+    # Find matching handler
+    handler = None
+    for key, value in question["handlerNext"].items():
+        clean_key = key.replace('\n', ' ').strip()
+        if clean_key == clean_answer:
+            handler = value
+            break
+    
+    if not handler:
+        # Try to find by partial match
+        for key, value in question["handlerNext"].items():
+            if clean_answer in key.replace('\n', ' '):
+                handler = value
+                break
+    
+    if not handler:
+        next_ref = str(int(current_ref) + 1)
+        if get_question(next_ref):
+            return {"status": "success", "next_ref": next_ref, "completed": False}
+        return {"status": "completed"}
+    
+    action = handler.get("action")
+    
+    if action == "navigate_to_screen":
+        # Check if it's a completion or continuation
+        ref_path = handler.get("ref", "")
+        if "StartRefund" in ref_path:
+            # This might mean completion or continue to next section
+            # Check if there are more questions after this
+            next_ref = str(int(current_ref) + 1)
+            if get_question(next_ref):
+                return {"status": "success", "next_ref": next_ref, "completed": False}
+            return {"status": "completed"}
+        return {"status": "completed"}
+    
+    elif action == "open_question":
+        next_ref = handler.get("ref")
+        return {"status": "success", "next_ref": str(next_ref), "completed": False}
+    
+    elif action == "to_save_and_finish":
+        return {"status": "completed"}
+    
+    elif action == "to_save_and_finish_with_error":
+        return {"status": "completed"}
+    
+    else:
+        next_ref = str(int(current_ref) + 1)
+        if get_question(next_ref):
+            return {"status": "success", "next_ref": next_ref, "completed": False}
         return {"status": "completed"}
 
-    next_ref = result.get("next_ref")
-
-    # Check if next_ref is in current phase
-    phase = session["phase"]
-    current_phase_questions = PHASE_QUESTIONS.get(phase, [])
-
-    if next_ref in current_phase_questions:
-        # Stay in same phase
-        next_index = current_phase_questions.index(next_ref)
-        return {
-            "status": "success",
-            "next_index": next_index
-        }
-    else:
-        # Check if it's in next phase
-        next_phase = phase + 1
-        next_phase_questions = PHASE_QUESTIONS.get(next_phase, [])
-        if next_ref in next_phase_questions:
-            return {
-                "status": "phase_change",
-                "next_phase": next_phase,
-                "next_index": next_phase_questions.index(next_ref)
+def handle_proposal(current_ref, answer):
+    """Handle proposal questions (like q5 with nested questions)"""
+    question = get_question(current_ref)
+    if not question or "proposal" not in question:
+        return None
+    
+    proposal = question.get("proposal", {})
+    clean_answer = answer.replace('\n', ' ').strip()
+    
+    # Find matching proposal
+    for key, proposal_questions in proposal.items():
+        clean_key = key.replace('\n', ' ').strip()
+        if clean_key == clean_answer or clean_answer in clean_key:
+            # Store that we need to ask follow-up questions
+            session["pending_proposal"] = {
+                "original_ref": current_ref,
+                "answer": answer,
+                "questions": proposal_questions,
+                "current_index": 0
             }
-        else:
-            # If not in next phase, assume completed or invalid
-            return {"status": "completed"}
+            return proposal_questions
+    
+    return None
+
+def add_message(role, content, options=None, input_type=None):
+    """Add a message to the chat history"""
+    message = {"role": role, "content": content}
+    if options:
+        message["options"] = options
+    if input_type:
+        message["input_type"] = input_type
+    session["messages"].append(message)
+
+def process_next_question():
+    """Process and send the next question"""
+    if session.get("completed"):
+        return
+    
+    # Check if we have pending proposal questions
+    if session.get("pending_proposal"):
+        proposal_data = session["pending_proposal"]
+        proposal_questions = proposal_data["questions"]
+        
+        if proposal_data.get("current_index", 0) < len(proposal_questions):
+            # Ask the next proposal question
+            prop_q = proposal_questions[proposal_data["current_index"]]
+            
+            question_text = get_question_text(prop_q)
+            options = get_options(prop_q)
+            input_type = get_question_type(prop_q)
+            
+            add_message("assistant", question_text, options, input_type)
+            session["waiting_for_answer"] = True
+            return
+    
+    # Regular question flow
+    current_ref = session["current_ref"]
+    question = get_question(current_ref)
+    
+    if not question:
+        complete_assessment()
+        return
+    
+    question_text = get_question_text(question)
+    options = get_options(question)
+    input_type = get_question_type(question)
+    
+    add_message("assistant", question_text, options, input_type)
+    session["waiting_for_answer"] = True
+
+def complete_assessment():
+    """Complete the assessment and show summary"""
+    session["completed"] = True
+    session["waiting_for_answer"] = False
+    
+    answers = session.get("answers", {})
+    
+    # Check if user qualifies (based on q13)
+    qualifies = False
+    if "13" in answers and answers["13"] == "Yes":
+        qualifies = True
+    
+    summary = "🎉 **Assessment Complete!** 🎉\n\n"
+    
+    if qualifies:
+        summary += "✅ **Good news!** Based on your answers, you may be eligible for a tax refund.\n\n"
+    else:
+        summary += "📋 **Assessment Summary**\n\n"
+    
+    summary += "**Your responses:**\n\n"
+    
+    # Show all answers in order
+    question_order = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"]
+    for ref in question_order:
+        if ref in answers:
+            question = get_question(ref)
+            if question:
+                summary += f"• **{question.get('title', ref)}**\n"
+                summary += f"  → {answers[ref]}\n\n"
+    
+    # Show proposal answers
+    for key, value in answers.items():
+        if key.startswith("proposal_"):
+            summary += f"• **Additional info**: {value}\n\n"
+    
+    if qualifies:
+        summary += "📞 **Next steps:** A tax specialist will contact you shortly to discuss your refund.\n\n"
+    else:
+        summary += "💡 Based on your responses, you may not qualify at this time. "
+        summary += "Keep track of your work expenses for future tax years!\n\n"
+    
+    summary += "Click 'Start New Assessment' below to begin again."
+    
+    add_message("assistant", summary)
 
 # =========================================================
-# ROOT
+# ROUTES
 # =========================================================
+
+@app.before_request
+def require_passkey():
+    allowed_routes = ["passkey_page", "verify_passkey", "static", "favicon"]
+    
+    if request.endpoint in allowed_routes:
+        return
+    
+    if not session.get("passkey_verified"):
+        return redirect(url_for("passkey_page"))
 
 @app.route("/")
 def index():
     init_session()
-
-    # ALWAYS force passkey first
-    if not session.get("passkey_verified", False):
+    if not session.get("passkey_verified"):
         return redirect(url_for("passkey_page"))
-
-    return redirect(url_for("welcome"))
-
-# =========================================================
-# WELCOME PAGE
-# =========================================================
-
-@app.route("/welcome")
-def welcome():
-    init_session()
-
-    if not session.get("passkey_verified", False):
-        return redirect(url_for("passkey_page"))
-
-    return render_template_string("""
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<title>Tax Refund Eligibility Chatbot</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-* { box-sizing: border-box; }
-body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    margin: 0;
-    padding: 20px;
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-.container {
-    background: white;
-    max-width: 600px;
-    width: 100%;
-    padding: 40px;
-    border-radius: 20px;
-    box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-    text-align: center;
-    animation: fadeIn 0.5s ease-in;
-}
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(20px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-h1 {
-    color: #333;
-    margin-bottom: 20px;
-    font-size: 2.2em;
-    font-weight: 300;
-}
-p {
-    color: #666;
-    font-size: 1.1em;
-    margin-bottom: 30px;
-    line-height: 1.6;
-}
-.start-btn {
-    background: linear-gradient(45deg, #667eea, #764ba2);
-    color: white;
-    border: none;
-    padding: 15px 40px;
-    font-size: 1.2em;
-    border-radius: 50px;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
-}
-.start-btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
-}
-.start-btn:active {
-    transform: translateY(0);
-}
-</style>
-</head>
-<body>
-<div class="container">
-<h1>🌅 Good morning!</h1>
-<p>Please answer a few questions to determine how eligible you are for a tax refund.</p>
-<a href='/start'><button class="start-btn">Start Assessment →</button></a>
-</div>
-</body>
-</html>
-""")
-
-
-# =========================================================
-# PASSKEY PAGE
-# =========================================================
+    return redirect(url_for("chat"))
 
 @app.route("/passkey")
 def passkey_page():
-
     init_session()
-
-    if session.get("passkey_verified", False):
-        return redirect(url_for("welcome"))
-
+    if session.get("passkey_verified"):
+        return redirect(url_for("chat"))
+    
     error_message = session.pop("passkey_error", None)
-
+    
     return render_template_string("""
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<title>Enter Passkey - Tax Refund Eligibility Chatbot</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-* { box-sizing: border-box; }
-body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    margin: 0;
-    padding: 20px;
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-.container {
-    background: white;
-    max-width: 600px;
-    width: 100%;
-    padding: 40px;
-    border-radius: 20px;
-    box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-    text-align: center;
-    animation: fadeIn 0.5s ease-in;
-}
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(20px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-h1 {
-    color: #333;
-    margin-bottom: 10px;
-    font-size: 2em;
-    font-weight: 300;
-}
-.subtitle {
-    color: #666;
-    margin-bottom: 30px;
-    font-size: 0.95em;
-}
-.error {
-    background: #fff2f2;
-    padding: 15px;
-    border-radius: 10px;
-    margin-bottom: 20px;
-    color: #d63031;
-    border-left: 4px solid #d63031;
-}
-.form-group {
-    margin-bottom: 20px;
-}
-label {
-    display: block;
-    text-align: left;
-    color: #333;
-    margin-bottom: 8px;
-    font-weight: 500;
-}
-input[type="password"] {
-    width: 100%;
-    padding: 15px;
-    border: 2px solid #e0e0e0;
-    border-radius: 12px;
-    font-size: 1em;
-    transition: border-color 0.3s ease;
-}
-input[type="password"]:focus {
-    outline: none;
-    border-color: #667eea;
-    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-}
-.submit-btn {
-    width: 100%;
-    padding: 15px;
-    background: linear-gradient(45deg, #667eea, #764ba2);
-    color: white;
-    border: none;
-    border-radius: 12px;
-    font-size: 1.1em;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
-}
-.submit-btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
-}
-.submit-btn:active {
-    transform: translateY(0);
-}
-</style>
+    <title>Passkey Required - Tax Bot</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            background: white;
+            max-width: 500px;
+            width: 100%;
+            padding: 40px;
+            border-radius: 24px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            text-align: center;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 1.8em;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+        }
+        .error {
+            background: #fee;
+            padding: 12px;
+            border-radius: 12px;
+            color: #c33;
+            margin-bottom: 20px;
+            font-size: 0.9em;
+        }
+        input {
+            width: 100%;
+            padding: 14px;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            font-size: 1em;
+            margin-bottom: 20px;
+            transition: border-color 0.2s;
+        }
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        button {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        button:hover {
+            transform: translateY(-2px);
+        }
+    </style>
 </head>
 <body>
-<div class="container">
-<h1>🔐 Access Required</h1>
-<p class="subtitle">Please enter the passkey to access the assessment</p>
-
-{% if error_message %}
-    <div class="error">
-        ⚠️ {{ error_message }}
+    <div class="container">
+        <h1>🔐 Access Required</h1>
+        <p class="subtitle">Enter passkey to continue</p>
+        {% if error_message %}
+            <div class="error">{{ error_message }}</div>
+        {% endif %}
+        <form method="POST" action="/verify_passkey">
+            <input type="password" name="passkey" placeholder="Enter passkey" required autofocus>
+            <button type="submit">Verify →</button>
+        </form>
     </div>
-{% endif %}
-
-<form method="POST" action="/verify_passkey">
-    <div class="form-group">
-        <label for="passkey">Passkey</label>
-        <input 
-            type="password" 
-            id="passkey" 
-            name="passkey" 
-            placeholder="Enter your passkey"
-            required
-            autofocus
-        >
-    </div>
-    <button type="submit" class="submit-btn">Verify & Continue →</button>
-</form>
-</div>
 </body>
 </html>
-""",
-    error_message=error_message
-    )
-
-# =========================================================
-# VERIFY PASSKEY
-# =========================================================
+""", error_message=error_message)
 
 @app.route("/verify_passkey", methods=["POST"])
 def verify_passkey():
-
     passkey = request.form.get("passkey", "").strip()
-
+    
     if passkey in VALID_PASSKEYS:
         session["passkey_verified"] = True
-        return redirect(url_for("welcome"))
+        return redirect(url_for("chat"))
     else:
         session["passkey_error"] = "Invalid passkey. Please try again."
         return redirect(url_for("passkey_page"))
 
-# =========================================================
-# START
-# =========================================================
-
-@app.route("/start")
-def start():
-
+@app.route("/chat")
+def chat():
     init_session()
-
-    # Verify passkey before starting
-    if not session.get("passkey_verified", False):
+    
+    if not session.get("passkey_verified"):
         return redirect(url_for("passkey_page"))
-
-    return redirect(url_for("question_page"))
-
-# =========================================================
-# QUESTION PAGE
-# =========================================================
-
-@app.route("/question")
-def question_page():
-
-    init_session()
-
-    # Verify passkey before showing question
-    if not session.get("passkey_verified", False):
-        return redirect(url_for("passkey_page"))
-
-    phase = session["phase"]
-    phase_index = session["phase_index"]
-
-    if phase_index >= len(PHASE_QUESTIONS[phase]):
-        return redirect(url_for("completed"))
-
-    current_ref = PHASE_QUESTIONS[phase][phase_index]
-
-    question = get_question(current_ref)
-
-    if not question:
-        return redirect(url_for("completed"))
-
-    error_message = session.pop("error_message", None)
-
-    # Calculate progress based on phase
-    total_questions = sum(len(qs) for qs in PHASE_QUESTIONS.values())
-    current_question_index = sum(len(PHASE_QUESTIONS[p]) for p in range(1, phase)) + phase_index
-    progress = int((current_question_index + 1) / total_questions * 100)
-
+    
+    # Start the conversation if it hasn't started
+    if not session["messages"] and not session["completed"]:
+        welcome_msg = "👋 Hello! I'm your Tax Assistant. I'll help you determine your eligibility for tax refunds and savings.\n\nLet's get started with a few questions about your income and work travel."
+        add_message("assistant", welcome_msg)
+        process_next_question()
+    
     return render_template_string("""
-
 <!DOCTYPE html>
-
-<html>
-
+<html lang="en">
 <head>
-
-<title>Questionnaire</title>
-
-<style>
-
-* { box-sizing: border-box; }
-body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    margin: 0;
-    padding: 20px;
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-.container {
-    background: white;
-    max-width: 700px;
-    width: 100%;
-    padding: 30px;
-    border-radius: 20px;
-    box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-    animation: fadeIn 0.5s ease-in;
-}
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(20px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-.progress-container {
-    margin-bottom: 30px;
-}
-.progress-bar {
-    width: 100%;
-    height: 8px;
-    background: #e0e0e0;
-    border-radius: 4px;
-    overflow: hidden;
-}
-.progress-fill {
-    height: 100%;
-    background: linear-gradient(45deg, #667eea, #764ba2);
-    border-radius: 4px;
-    transition: width 0.3s ease;
-}
-.progress-text {
-    text-align: center;
-    margin-top: 10px;
-    color: #666;
-    font-size: 0.9em;
-}
-.info {
-    background: #f8f9ff;
-    padding: 20px;
-    border-radius: 12px;
-    margin-bottom: 25px;
-    border-left: 4px solid #667eea;
-}
-.info strong {
-    color: #333;
-}
-.error {
-    background: #fff2f2;
-    padding: 15px;
-    border-radius: 10px;
-    margin-bottom: 20px;
-    color: #d63031;
-    border-left: 4px solid #d63031;
-}
-h1 {
-    color: #333;
-    margin-bottom: 15px;
-    font-size: 1.8em;
-    font-weight: 400;
-}
-.option {
-    border: 2px solid #e0e0e0;
-    border-radius: 12px;
-    padding: 15px;
-    margin-top: 10px;
-    transition: all 0.3s ease;
-    cursor: pointer;
-}
-.option:hover {
-    border-color: #667eea;
-    background: #f8f9ff;
-    transform: translateY(-2px);
-}
-.option input[type="radio"] {
-    margin-right: 10px;
-    accent-color: #667eea;
-}
-.submit-btn {
-    width: 100%;
-    padding: 15px;
-    margin-top: 25px;
-    border: none;
-    border-radius: 12px;
-    background: linear-gradient(45deg, #667eea, #764ba2);
-    color: white;
-    font-size: 1.1em;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
-}
-.submit-btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
-}
-.submit-btn:active {
-    transform: translateY(0);
-}
-.back-btn {
-    background: #f1f1f1;
-    color: #666;
-    border: 2px solid #e0e0e0;
-    margin-top: 15px;
-    width: 100%;
-    padding: 12px;
-    border-radius: 12px;
-    cursor: pointer;
-    transition: all 0.3s ease;
-}
-.back-btn:hover {
-    background: #e8e8e8;
-    border-color: #ccc;
-}
-input[type="text"] {
-    width: 100%;
-    padding: 15px;
-    margin-top: 15px;
-    border-radius: 12px;
-    border: 2px solid #e0e0e0;
-    font-size: 1em;
-    transition: border-color 0.3s ease;
-}
-input[type="text"]:focus {
-    outline: none;
-    border-color: #667eea;
-    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-}
-.submit-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-.validation-error {
-    color: #d63031;
-    font-size: 0.9em;
-    margin-top: 8px;
-    display: none;
-}
-.validation-error.show {
-    display: block;
-}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="container">
-    <div class="progress-container">
-        <div class="progress-bar">
-            <div class="progress-fill" style="width: {{ progress }}%"></div>
-        </div>
-        <div class="progress-text">Progress: {{ progress }}%</div>
-    </div>
-
-    {% if error_message %}
-        <div class="error">
-            ⚠️ {{ error_message }}
-        </div>
-    {% endif %}
-
-    <h1>{{ question.title }}</h1>
-
-    {% if question.infoTitle %}
-        <div class="info">
-
-            <strong>
-                {{ question.infoTitle }}
-            </strong>
-
-            <br><br>
-
-            {{ question.info }}
-
-        </div>
-    {% endif %}
-
-    <form method="POST" action="/answer" onsubmit="return validateForm(event)">
-
-    {% if question.type in ['radiov2','radio','single_choice'] %}
-
-        {% for opt in question.options %}
-
-            <div class="option">
-
-                <label>
-
-                    <input
-                        type="radio"
-                        name="answer"
-                        value="{{ opt }}"
-                        required
-                    >
-
-                    {{ opt }}
-
-                </label>
-
-            </div>
-
-        {% endfor %}
-        <button type="submit" class="submit-btn">Next →</button>
-
-    {% elif question.type in ['numeric','number','price','counter'] %}
-
-        <input type="text" id="numericInput" name="answer" placeholder="{{ question.placeholder }}" required oninput="validateNumericInput()">
-        <div id="validationError" class="validation-error">⚠️ Please enter a valid number</div>
-        <button type="submit" id="submitBtn" class="submit-btn">Next →</button>
-
-    {% else %}
-
-
-        <input type="text" name="answer" required>
-        <button type="submit" class="submit-btn">Next →</button>
-
-    {% endif %}
-
-    </form>
-
-    {% if session.history|length > 0 %}
-
-        <form method="POST" action="/back">
-
-            <button type="submit" class="back-btn">← Back</button>
-
-        </form>
-
-    {% endif %}
-
-</div>
-
-<script>
-function validateNumericInput() {
-    const input = document.getElementById('numericInput');
-    const errorMsg = document.getElementById('validationError');
-    const submitBtn = document.getElementById('submitBtn');
-    
-    if (!input || !errorMsg || !submitBtn) return;
-    
-    const value = input.value.trim();
-    const cleanedValue = value.replace(/,/g, '').replace(/£/g, '').trim();
-    
-    // Check if it's a valid number
-    const isValidNumber = cleanedValue !== '' && !isNaN(cleanedValue) && cleanedValue !== '0' || cleanedValue === '0';
-    
-    if (value === '') {
-        errorMsg.classList.remove('show');
-        submitBtn.disabled = true;
-    } else if (!isValidNumber || isNaN(parseFloat(cleanedValue))) {
-        errorMsg.classList.add('show');
-        submitBtn.disabled = true;
-    } else {
-        errorMsg.classList.remove('show');
-        submitBtn.disabled = false;
-    }
-}
-
-function validateForm(event) {
-    const input = document.getElementById('numericInput');
-    
-    // If this is a numeric question
-    if (input) {
-        const value = input.value.trim();
-        const cleanedValue = value.replace(/,/g, '').replace(/£/g, '').trim();
-        
-        // Check if it's a valid number
-        if (value === '' || isNaN(cleanedValue) || cleanedValue === '') {
-            event.preventDefault();
-            return false;
+    <title>Tax Assistant Bot</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
-    }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .chat-container {
+            max-width: 900px;
+            width: 100%;
+            margin: 0 auto;
+            background: white;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 0 40px rgba(0,0,0,0.1);
+        }
+        
+        .chat-header {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            padding: 20px;
+            text-align: center;
+            border-radius: 0;
+        }
+        
+        .chat-header h1 {
+            font-size: 1.5em;
+            font-weight: 500;
+        }
+        
+        .chat-header p {
+            font-size: 0.85em;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+        
+        .messages-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background: #f7f7f8;
+        }
+        
+        .message {
+            margin-bottom: 20px;
+            display: flex;
+            animation: fadeIn 0.3s ease-in;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .message.user {
+            justify-content: flex-end;
+        }
+        
+        .message-content {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 18px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        
+        .message.user .message-content {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+        
+        .message.assistant .message-content {
+            background: white;
+            color: #333;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+        
+        .options-container {
+            margin-top: 12px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .option-btn {
+            background: #f0f0f0;
+            border: 1px solid #ddd;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 0.9em;
+            color: #333;
+        }
+        
+        .option-btn:hover {
+            background: #667eea;
+            border-color: #667eea;
+            color: white;
+            transform: translateY(-1px);
+        }
+        
+        .input-container {
+            background: white;
+            border-top: 1px solid #e0e0e0;
+            padding: 20px;
+            display: flex;
+            gap: 10px;
+        }
+        
+        .input-container input {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid #e0e0e0;
+            border-radius: 24px;
+            font-size: 1em;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        
+        .input-container input:focus {
+            border-color: #667eea;
+        }
+        
+        .input-container button {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 24px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: transform 0.2s;
+        }
+        
+        .input-container button:hover {
+            transform: translateY(-1px);
+        }
+        
+        .input-container button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .restart-btn {
+            background: #f0f0f0;
+            color: #666;
+            margin-top: 10px;
+        }
+        
+        .restart-btn:hover {
+            background: #e0e0e0;
+            transform: translateY(-1px);
+        }
+        
+        .typing-indicator {
+            display: flex;
+            gap: 4px;
+            padding: 12px 16px;
+            background: white;
+            border-radius: 18px;
+            width: fit-content;
+        }
+        
+        .typing-indicator span {
+            width: 8px;
+            height: 8px;
+            background: #999;
+            border-radius: 50%;
+            animation: bounce 1.4s infinite;
+        }
+        
+        .typing-indicator span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+        
+        .typing-indicator span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+        
+        @keyframes bounce {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-10px); }
+        }
+        
+        @media (max-width: 768px) {
+            .message-content {
+                max-width: 85%;
+            }
+            
+            .input-container {
+                padding: 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h1>💬 Tax Assistant Bot</h1>
+            <p>Your personal tax eligibility advisor</p>
+        </div>
+        
+        <div class="messages-container" id="messages-container">
+            {% for message in messages %}
+                <div class="message {{ message.role }}">
+                    <div class="message-content">
+                        {{ message.content | replace('\\n', '<br>') | safe }}
+                        {% if message.options %}
+                            <div class="options-container">
+                                {% for option in message.options %}
+                                    <button class="option-btn" onclick="sendMessage('{{ option | replace("'", "\\'") | replace("\\n", " ") }}')">
+                                        {{ option | replace('\\n', ' ') }}
+                                    </button>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+            {% endfor %}
+            
+            {% if waiting_for_answer and not completed %}
+                <div class="message assistant">
+                    <div class="typing-indicator">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                    </div>
+                </div>
+            {% endif %}
+        </div>
+        
+        <div class="input-container">
+            <input type="text" id="message-input" placeholder="Type your answer here..." autocomplete="off">
+            <button onclick="sendMessage()" id="send-btn">Send</button>
+        </div>
+        
+        {% if completed %}
+            <div class="input-container">
+                <button onclick="restartChat()" class="restart-btn">🔄 Start New Assessment</button>
+            </div>
+        {% endif %}
+    </div>
     
-    return true;
-}
-
-// Initialize validation on page load
-document.addEventListener('DOMContentLoaded', function() {
-    const input = document.getElementById('numericInput');
-    if (input) {
-        validateNumericInput();
-    }
-});
-</script>
-
+    <script>
+        const messagesContainer = document.getElementById('messages-container');
+        const messageInput = document.getElementById('message-input');
+        const sendBtn = document.getElementById('send-btn');
+        
+        function scrollToBottom() {
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+        
+        scrollToBottom();
+        
+        function sendMessage(predefinedAnswer = null) {
+            let answer = predefinedAnswer || messageInput.value.trim();
+            
+            if (!answer && !predefinedAnswer) return;
+            
+            addMessageToUI('user', answer);
+            
+            if (!predefinedAnswer) {
+                messageInput.value = '';
+            }
+            
+            setInputEnabled(false);
+            
+            fetch('/send_message', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({answer: answer})
+            })
+            .then(response => response.json())
+            .then(data => {
+                setInputEnabled(true);
+                
+                if (data.status === 'completed') {
+                    window.location.reload();
+                } else if (data.messages) {
+                    data.messages.forEach(msg => {
+                        addMessageToUI(msg.role, msg.content, msg.options);
+                    });
+                    scrollToBottom();
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                setInputEnabled(true);
+                addMessageToUI('assistant', 'Sorry, there was an error. Please try again.');
+            });
+        }
+        
+        function addMessageToUI(role, content, options = null) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}`;
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.innerHTML = content.replace(/\\n/g, '<br>');
+            
+            if (options && options.length > 0) {
+                const optionsDiv = document.createElement('div');
+                optionsDiv.className = 'options-container';
+                options.forEach(option => {
+                    const btn = document.createElement('button');
+                    btn.className = 'option-btn';
+                    const cleanOption = option.replace(/\\n/g, ' ');
+                    btn.textContent = cleanOption;
+                    btn.onclick = () => sendMessage(option);
+                    optionsDiv.appendChild(btn);
+                });
+                contentDiv.appendChild(optionsDiv);
+            }
+            
+            messageDiv.appendChild(contentDiv);
+            messagesContainer.appendChild(messageDiv);
+            scrollToBottom();
+        }
+        
+        function setInputEnabled(enabled) {
+            messageInput.disabled = !enabled;
+            sendBtn.disabled = !enabled;
+            if (enabled) {
+                messageInput.focus();
+            }
+        }
+        
+        function restartChat() {
+            fetch('/restart_chat', {method: 'POST'})
+            .then(() => window.location.reload());
+        }
+        
+        messageInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+        
+        messageInput.focus();
+    </script>
 </body>
-
 </html>
+""", messages=session["messages"], 
+         waiting_for_answer=session["waiting_for_answer"],
+         completed=session["completed"])
 
-""",
-    question=question,
-    session=session,
-    error_message=error_message,
-    progress=progress
-    )
-
-# =========================================================
-# ANSWER
-# =========================================================
-
-# =========================================================
-# GET CURRENT QUESTION (API)
-
-@app.route("/get_question")
-def get_question_api():
-
+@app.route("/send_message", methods=["POST"])
+def send_message():
     init_session()
-
+    
+    if session.get("completed"):
+        return jsonify({"status": "completed"})
+    
+    if not session.get("waiting_for_answer"):
+        return jsonify({"status": "error", "message": "Not waiting for answer"})
+    
+    data = request.get_json()
+    answer = data.get("answer", "").strip()
+    
+    if not answer:
+        return jsonify({"status": "error", "message": "Please provide an answer"})
+    
+    # Check if we're in a proposal flow
+    if session.get("pending_proposal"):
+        proposal_data = session["pending_proposal"]
+        prop_index = proposal_data.get("current_index", 0)
+        prop_questions = proposal_data["questions"]
+        
+        if prop_index < len(prop_questions):
+            # Save proposal answer
+            prop_q = prop_questions[prop_index]
+            answer_key = f"proposal_{proposal_data['original_ref']}_{prop_index}"
+            
+            # Clean numeric if needed
+            if prop_q.get("type") in ["numeric", "number", "price", "counter"]:
+                answer = clean_number(answer)
+            
+            session["answers"][answer_key] = answer
+            
+            # Move to next proposal question
+            proposal_data["current_index"] = prop_index + 1
+            session["pending_proposal"] = proposal_data
+            
+            if prop_index + 1 >= len(prop_questions):
+                # All proposal questions answered, clear pending and continue
+                session["pending_proposal"] = None
+                session["waiting_for_answer"] = False
+                
+                # Continue with main flow - get next question from original handler
+                original_ref = proposal_data["original_ref"]
+                result = process_handler_next(original_ref, proposal_data["answer"])
+                
+                if result.get("status") == "completed":
+                    complete_assessment()
+                    return jsonify({"status": "completed"})
+                elif result.get("next_ref"):
+                    session["current_ref"] = result["next_ref"]
+                    process_next_question()
+                else:
+                    # Try to go to next sequential question
+                    next_ref = str(int(original_ref) + 1)
+                    if get_question(next_ref):
+                        session["current_ref"] = next_ref
+                        process_next_question()
+                    else:
+                        complete_assessment()
+                        return jsonify({"status": "completed"})
+            else:
+                # Ask next proposal question
+                session["waiting_for_answer"] = False
+                process_next_question()
+            
+            return jsonify({
+                "status": "success",
+                "messages": [session["messages"][-1]] if session["messages"] else []
+            })
+    
+    # Regular question flow
     current_ref = session["current_ref"]
     question = get_question(current_ref)
-
+    
     if not question:
+        complete_assessment()
+        return jsonify({"status": "completed"})
+    
+    # Clean number if needed
+    if question.get("type") in ["numeric", "number", "price", "counter"]:
+        answer = clean_number(answer)
+    
+    # Check for proposal first
+    proposal_questions = handle_proposal(current_ref, answer)
+    if proposal_questions:
+        # Save the answer to the main question
+        session["answers"][current_ref] = answer
+        session["history"].append(current_ref)
+        session["waiting_for_answer"] = False
+        
+        # Start proposal flow
+        process_next_question()
+        
         return jsonify({
-            "status": "completed",
-            "message": "No current question",
-            "current_ref": current_ref
+            "status": "success",
+            "messages": [session["messages"][-1]]
         })
-
+    
+    # Process handler
+    result = process_handler_next(current_ref, answer)
+    
+    if result.get("status") == "error":
+        add_message("assistant", f"❌ {result.get('message', 'Invalid answer. Please try again.')}")
+        return jsonify({
+            "status": "error",
+            "messages": [session["messages"][-1]]
+        })
+    
+    # Save answer
+    session["answers"][current_ref] = answer
+    session["history"].append(current_ref)
+    session["waiting_for_answer"] = False
+    
+    # Handle completion
+    if result.get("status") == "completed" or result.get("completed"):
+        complete_assessment()
+        return jsonify({"status": "completed"})
+    
+    # Move to next question
+    if result.get("next_ref"):
+        session["current_ref"] = result["next_ref"]
+        process_next_question()
+    else:
+        # Try to go to next sequential question
+        next_ref = str(int(current_ref) + 1)
+        if get_question(next_ref):
+            session["current_ref"] = next_ref
+            process_next_question()
+        else:
+            complete_assessment()
+            return jsonify({"status": "completed"})
+    
     return jsonify({
         "status": "success",
-        "current_ref": current_ref,
-        "question": question
+        "messages": [session["messages"][-1]]
     })
 
-# =========================================================
-# ANSWER
-
-@app.route("/answer", methods=["POST"])
-def answer():
-
-    init_session()
-
-    current_ref = session["current_ref"]
-
-    question = get_question(current_ref)
-
-    if not question:
-        return redirect(url_for("completed"))
-
-    if request.is_json:
-        payload = request.get_json(silent=True) or {}
-        answer_value = payload.get("answer")
-    else:
-        answer_value = request.form.get("answer")
-
-    # CLEAN NUMBERS
-    if question.get("type") in [
-        "numeric",
-        "number",
-        "price",
-        "counter"
-    ]:
-        answer_value = clean_number(answer_value)
-
-    result = process_answer(
-        current_ref,
-        answer_value
-    )
-
-    # -----------------------------------------------------
-    # ERROR
-    # -----------------------------------------------------
-
-    if result["status"] == "error":
-
-        if request.is_json:
-            return jsonify({
-                "status": "error",
-                "message": result["message"]
-            }), 400
-
-        session["error_message"] = result["message"]
-
-        return redirect(url_for("question_page"))
-
-    # -----------------------------------------------------
-    # SAVE ANSWER
-    # -----------------------------------------------------
-
-    answers = session["answers"]
-
-    answers[current_ref] = answer_value
-
-    session["answers"] = answers
-
-    # -----------------------------------------------------
-    # SAVE HISTORY
-    # -----------------------------------------------------
-
-    history = session["history"]
-
-    history.append(current_ref)
-
-    session["history"] = history
-
-    # -----------------------------------------------------
-    # PHASE CHANGE
-    # -----------------------------------------------------
-
-    if result["status"] == "phase_change":
-
-        session["phase"] = result["next_phase"]
-        session["phase_index"] = result["next_index"]
-        session["current_ref"] = PHASE_QUESTIONS[result["next_phase"]][result["next_index"]]
-
-        return redirect(url_for("phase_message"))
-
-    # -----------------------------------------------------
-    # COMPLETE
-    # -----------------------------------------------------
-
-    if result["status"] == "completed":
-
-        return redirect(url_for("completed"))
-
-    # -----------------------------------------------------
-    # NEXT QUESTION
-    # -----------------------------------------------------
-
-    session["phase_index"] = result["next_index"]
-    session["current_ref"] = PHASE_QUESTIONS[session["phase"]][result["next_index"]]
-
-    return redirect(url_for("question_page"))
-
-# =========================================================
-# BACK
-# =========================================================
-
-@app.route("/back", methods=["POST"])
-def back():
-
-    init_session()
-
-    history = session["history"]
-
-    if history:
-
-        current_ref = session["current_ref"]
-
-        # REMOVE CURRENT ANSWER
-        answers = session["answers"]
-
-        if current_ref in answers:
-            del answers[current_ref]
-
-        session["answers"] = answers
-
-        # GO BACK
-        previous_ref = history.pop()
-
-        session["history"] = history
-
-        session["current_ref"] = previous_ref
-
-        # Update phase and phase_index
-        for ph, questions in PHASE_QUESTIONS.items():
-            if previous_ref in questions:
-                session["phase"] = ph
-                session["phase_index"] = questions.index(previous_ref)
-                break
-
-    return redirect(url_for("question_page"))
-
-# =========================================================
-# PHASE MESSAGE
-# =========================================================
-
-@app.route("/phase_message")
-def phase_message():
-
-    return render_template_string("""
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<title>Tax Refund Chatbot</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-* { box-sizing: border-box; }
-body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    margin: 0;
-    padding: 20px;
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-.container {
-    background: white;
-    max-width: 600px;
-    width: 100%;
-    padding: 40px;
-    border-radius: 20px;
-    box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-    text-align: center;
-    animation: fadeIn 0.5s ease-in;
-}
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(20px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-h1 {
-    color: #333;
-    margin-bottom: 20px;
-    font-size: 2.2em;
-    font-weight: 300;
-}
-p {
-    color: #666;
-    font-size: 1.1em;
-    margin-bottom: 30px;
-    line-height: 1.6;
-}
-.continue-btn {
-    background: linear-gradient(45deg, #667eea, #764ba2);
-    color: white;
-    border: none;
-    padding: 15px 40px;
-    font-size: 1.2em;
-    border-radius: 50px;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
-}
-.continue-btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
-}
-.continue-btn:active {
-    transform: translateY(0);
-}
-</style>
-</head>
-<body>
-<div class="container">
-<h1>✅ Thank you!</h1>
-<p>Now let's move to the next step: tax savings assessment.</p>
-<a href='/continue'><button class="continue-btn">Continue →</button></a>
-</div>
-</body>
-</html>
-""")
-
-# =========================================================
-# CONTINUE
-# =========================================================
-
-@app.route("/continue")
-def continue_phase():
-
-    return redirect(url_for("question_page"))
-
-# =========================================================
-# COMPLETED
-# =========================================================
-
-@app.route("/completed")
-def completed():
-
-    answers = session.get("answers", {})
-
-    formatted_answers = ""
-
-    for ref in QUESTION_ORDER:
-        if ref in answers:
-            formatted_answers += f"<p><strong>{ref}</strong>: {answers[ref]}</p>"
-
-    return f"""
-
-<html lang="en">
-
-<head>
-<title>Assessment Complete</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-* {{ box-sizing: border-box; }}
-body {{
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    margin: 0;
-    padding: 20px;
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}}
-.container {{
-    background: white;
-    max-width: 700px;
-    width: 100%;
-    padding: 40px;
-    border-radius: 20px;
-    box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-    text-align: center;
-    animation: fadeIn 0.5s ease-in;
-}}
-@keyframes fadeIn {{
-    from {{ opacity: 0; transform: translateY(20px); }}
-    to {{ opacity: 1; transform: translateY(0); }}
-}}
-h1 {{
-    color: #333;
-    margin-bottom: 20px;
-    font-size: 2.2em;
-    font-weight: 300;
-}}
-p {{
-    color: #666;
-    margin-bottom: 15px;
-    line-height: 1.6;
-    text-align: left;
-}}
-.restart-btn {{
-    background: linear-gradient(45deg, #667eea, #764ba2);
-    color: white;
-    border: none;
-    padding: 15px 40px;
-    font-size: 1.2em;
-    border-radius: 50px;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
-    margin-top: 20px;
-}}
-.restart-btn:hover {{
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
-}}
-.restart-btn:active {{
-    transform: translateY(0);
-}}
-</style>
-</head>
-
-<body>
-
-<div class="container">
-
-<h1>🎉 Thank you for submitting!</h1>
-
-<p>Your assessment has been completed. Here are your answers:</p>
-
-{formatted_answers}
-
-<a href='/restart'>
-
-<button class="restart-btn">Take Assessment Again →</button>
-
-</a>
-
-</div>
-
-</body>
-
-</html>
-
-"""
-
-# =========================================================
-# RESTART
-# =========================================================
-
-@app.route("/restart")
-def restart():
-
+@app.route("/restart_chat", methods=["POST"])
+def restart_chat():
     session.clear()
-
-    return redirect(url_for("passkey_page"))
-
-# =========================================================
-# RUN
-# =========================================================
+    init_session()
+    return jsonify({"status": "success"})
 
 if __name__ == "__main__":
-
     app.run(debug=True)
