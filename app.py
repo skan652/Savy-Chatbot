@@ -24,6 +24,15 @@ QUESTIONS = data["questions"]
 QUESTION_MAP = {q["ref"]: q for q in QUESTIONS}
 
 # =========================================================
+# PHASE CONFIGURATION
+# =========================================================
+# Tax Refunds Phase: Questions 1-8
+# Tax Savings Phase: Questions 9-15
+
+PHASE_1_QUESTIONS = ["1", "2", "3", "4", "5", "6", "7", "8"]
+PHASE_2_QUESTIONS = ["9", "10", "11", "12", "13", "14", "15"]
+
+# =========================================================
 # HELPER FUNCTIONS
 # =========================================================
 
@@ -44,6 +53,10 @@ def init_session():
         session["history"] = []
     if "pending_proposal" not in session:
         session["pending_proposal"] = None
+    if "phase" not in session:
+        session["phase"] = 1  # 1 = Tax Refunds, 2 = Tax Savings
+    if "phase_transition_shown" not in session:
+        session["phase_transition_shown"] = False
 
 def get_question(ref):
     return QUESTION_MAP.get(str(ref))
@@ -51,7 +64,6 @@ def get_question(ref):
 def clean_number(value):
     if value is None:
         return None
-    # Remove £, commas, spaces
     cleaned = re.sub(r'[£,€$]', '', str(value))
     cleaned = re.sub(r'[^\d.]', '', cleaned)
     return cleaned
@@ -77,7 +89,6 @@ def get_question_text(question):
 def get_options(question):
     """Get options for a question"""
     if question and question.get("type") in ['radiov2', 'radio', 'single_choice']:
-        # Clean up options (remove newlines)
         options = question.get("options", [])
         return [opt.replace('\n', ' ') for opt in options]
     return None
@@ -100,13 +111,9 @@ def process_handler_next(current_ref, answer):
     """Process the handlerNext logic from the JSON"""
     question = get_question(current_ref)
     if not question or "handlerNext" not in question:
-        # If no handler, just move to next sequential question
-        next_ref = str(int(current_ref) + 1)
-        if get_question(next_ref):
-            return {"status": "success", "next_ref": next_ref, "completed": False}
-        return {"status": "completed"}
+        # Move to next question in current phase
+        return get_next_question_in_phase(current_ref)
     
-    # Clean answer for matching (remove newlines, extra spaces)
     clean_answer = answer.replace('\n', ' ').strip()
     
     # Find matching handler
@@ -118,30 +125,21 @@ def process_handler_next(current_ref, answer):
             break
     
     if not handler:
-        # Try to find by partial match
         for key, value in question["handlerNext"].items():
             if clean_answer in key.replace('\n', ' '):
                 handler = value
                 break
     
     if not handler:
-        next_ref = str(int(current_ref) + 1)
-        if get_question(next_ref):
-            return {"status": "success", "next_ref": next_ref, "completed": False}
-        return {"status": "completed"}
+        return get_next_question_in_phase(current_ref)
     
     action = handler.get("action")
     
     if action == "navigate_to_screen":
-        # Check if it's a completion or continuation
         ref_path = handler.get("ref", "")
         if "StartRefund" in ref_path:
-            # This might mean completion or continue to next section
-            # Check if there are more questions after this
-            next_ref = str(int(current_ref) + 1)
-            if get_question(next_ref):
-                return {"status": "success", "next_ref": next_ref, "completed": False}
-            return {"status": "completed"}
+            # Move to next question in phase
+            return get_next_question_in_phase(current_ref)
         return {"status": "completed"}
     
     elif action == "open_question":
@@ -155,10 +153,26 @@ def process_handler_next(current_ref, answer):
         return {"status": "completed"}
     
     else:
-        next_ref = str(int(current_ref) + 1)
-        if get_question(next_ref):
+        return get_next_question_in_phase(current_ref)
+
+def get_next_question_in_phase(current_ref):
+    """Get the next question within the current phase"""
+    if session["phase"] == 1:
+        current_index = PHASE_1_QUESTIONS.index(current_ref) if current_ref in PHASE_1_QUESTIONS else -1
+        if current_index >= 0 and current_index + 1 < len(PHASE_1_QUESTIONS):
+            next_ref = PHASE_1_QUESTIONS[current_index + 1]
             return {"status": "success", "next_ref": next_ref, "completed": False}
-        return {"status": "completed"}
+        else:
+            # End of phase 1, move to phase 2
+            return {"status": "phase_complete"}
+    else:
+        current_index = PHASE_2_QUESTIONS.index(current_ref) if current_ref in PHASE_2_QUESTIONS else -1
+        if current_index >= 0 and current_index + 1 < len(PHASE_2_QUESTIONS):
+            next_ref = PHASE_2_QUESTIONS[current_index + 1]
+            return {"status": "success", "next_ref": next_ref, "completed": False}
+        else:
+            # End of phase 2, complete
+            return {"status": "completed"}
 
 def handle_proposal(current_ref, answer):
     """Handle proposal questions (like q5 with nested questions)"""
@@ -169,11 +183,9 @@ def handle_proposal(current_ref, answer):
     proposal = question.get("proposal", {})
     clean_answer = answer.replace('\n', ' ').strip()
     
-    # Find matching proposal
     for key, proposal_questions in proposal.items():
         clean_key = key.replace('\n', ' ').strip()
         if clean_key == clean_answer or clean_answer in clean_key:
-            # Store that we need to ask follow-up questions
             session["pending_proposal"] = {
                 "original_ref": current_ref,
                 "answer": answer,
@@ -204,9 +216,7 @@ def process_next_question():
         proposal_questions = proposal_data["questions"]
         
         if proposal_data.get("current_index", 0) < len(proposal_questions):
-            # Ask the next proposal question
             prop_q = proposal_questions[proposal_data["current_index"]]
-            
             question_text = get_question_text(prop_q)
             options = get_options(prop_q)
             input_type = get_question_type(prop_q)
@@ -230,50 +240,107 @@ def process_next_question():
     add_message("assistant", question_text, options, input_type)
     session["waiting_for_answer"] = True
 
+def show_phase_transition():
+    """Show the transition message between phases"""
+    if session["phase"] == 2 and not session.get("phase_transition_shown"):
+        transition_msg = "✅ **Thank you for completing the tax refunds section!**\n\n"
+        transition_msg += "Now let's move to the next step: **Tax Savings Assessment**.\n"
+        transition_msg += "Please answer the following questions about your travel and expenses.\n"
+        transition_msg += "\n---\n"
+        
+        add_message("assistant", transition_msg)
+        session["phase_transition_shown"] = True
+        return True
+    return False
+
 def complete_assessment():
-    """Complete the assessment and show summary"""
+    """Complete the assessment and show final results"""
     session["completed"] = True
     session["waiting_for_answer"] = False
     
     answers = session.get("answers", {})
     
-    # Check if user qualifies (based on q13)
-    qualifies = False
+    # Calculate eligibility based on answers
+    eligible_for_refund = False
+    eligible_for_savings = False
+    
+    # Check eligibility criteria
+    if "1" in answers:
+        income = answers["1"]
+        if income in ["Between £14k & £50k", "Over £50k"]:
+            eligible_for_refund = True
+    
+    if "2" in answers and answers["2"] == "Yes":
+        eligible_for_refund = eligible_for_refund and True
+    
     if "13" in answers and answers["13"] == "Yes":
-        qualifies = True
+        eligible_for_savings = True
     
-    summary = "🎉 **Assessment Complete!** 🎉\n\n"
+    # Build final results message
+    final_message = "🎉 **Assessment Complete!** 🎉\n\n"
+    final_message += "=" * 50 + "\n\n"
     
-    if qualifies:
-        summary += "✅ **Good news!** Based on your answers, you may be eligible for a tax refund.\n\n"
+    final_message += "📊 **FINAL RESULTS**\n\n"
+    
+    # Tax Refund Eligibility
+    final_message += "💰 **Tax Refund Eligibility:**\n"
+    if eligible_for_refund:
+        final_message += "✅ **You may be eligible for a tax refund!**\n"
+        final_message += "Based on your responses about income and work travel, you could claim back:\n"
+        final_message += "• Travel expenses\n"
+        final_message += "• Mileage costs\n"
+        final_message += "• Food and drink expenses\n\n"
     else:
-        summary += "📋 **Assessment Summary**\n\n"
+        final_message += "❌ Not eligible for tax refund at this time.\n"
+        final_message += "You may still qualify for other tax savings.\n\n"
     
-    summary += "**Your responses:**\n\n"
-    
-    # Show all answers in order
-    question_order = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"]
-    for ref in question_order:
-        if ref in answers:
-            question = get_question(ref)
-            if question:
-                summary += f"• **{question.get('title', ref)}**\n"
-                summary += f"  → {answers[ref]}\n\n"
-    
-    # Show proposal answers
-    for key, value in answers.items():
-        if key.startswith("proposal_"):
-            summary += f"• **Additional info**: {value}\n\n"
-    
-    if qualifies:
-        summary += "📞 **Next steps:** A tax specialist will contact you shortly to discuss your refund.\n\n"
+    # Tax Savings Eligibility
+    final_message += "💡 **Tax Savings Eligibility:**\n"
+    if eligible_for_savings:
+        final_message += "✅ **You may be eligible for additional tax savings!**\n"
+        final_message += "Your responses indicate you might qualify for:\n"
+        final_message += "• Work-from-home tax relief\n"
+        final_message += "• Professional subscription deductions\n"
+        final_message += "• Uniform and tool allowances\n\n"
     else:
-        summary += "💡 Based on your responses, you may not qualify at this time. "
-        summary += "Keep track of your work expenses for future tax years!\n\n"
+        final_message += "ℹ️ Limited tax savings identified at this time.\n\n"
     
-    summary += "Click 'Start New Assessment' below to begin again."
+    # Summary of key answers
+    final_message += "=" * 50 + "\n\n"
+    final_message += "📋 **Summary of Your Responses:**\n\n"
     
-    add_message("assistant", summary)
+    key_info = []
+    if "1" in answers:
+        key_info.append(f"• Annual Income: {answers['1']}")
+    if "2" in answers:
+        key_info.append(f"• Travel for Work: {answers['2']}")
+    if "4" in answers:
+        key_info.append(f"• Annual Mileage: {answers['4']} miles")
+    if "9" in answers:
+        key_info.append(f"• Travel Days/Week: {answers['9']} days")
+    if "13" in answers:
+        key_info.append(f"• Past Income >£14k: {answers['13']}")
+    
+    final_message += "\n".join(key_info)
+    
+    final_message += "\n\n" + "=" * 50 + "\n\n"
+    final_message += "📞 **Next Steps:**\n\n"
+    
+    if eligible_for_refund or eligible_for_savings:
+        final_message += "A tax specialist will contact you within 2-3 business days to:\n"
+        final_message += "• Review your eligibility in detail\n"
+        final_message += "• Calculate your potential refund amount\n"
+        final_message += "• Guide you through the claims process\n\n"
+    else:
+        final_message += "While you may not qualify at this time, keep track of:\n"
+        final_message += "• Work-related travel expenses\n"
+        final_message += "• Mileage records\n"
+        final_message += "• Food and drink receipts for future claims\n\n"
+    
+    final_message += "Thank you for using the Tax Assistant Bot! 🙏\n\n"
+    final_message += "Click 'Start New Assessment' below to begin again."
+    
+    add_message("assistant", final_message)
 
 # =========================================================
 # ROUTES
@@ -413,7 +480,9 @@ def chat():
     
     # Start the conversation if it hasn't started
     if not session["messages"] and not session["completed"]:
-        welcome_msg = "👋 Hello! I'm your Tax Assistant. I'll help you determine your eligibility for tax refunds and savings.\n\nLet's get started with a few questions about your income and work travel."
+        welcome_msg = "🌅 **Good morning!**\n\n"
+        welcome_msg += "Please answer a few questions to determine how eligible you are for a tax refund and tax savings.\n\n"
+        welcome_msg += "Let's start with the **Tax Refunds Assessment**."
         add_message("assistant", welcome_msg)
         process_next_question()
     
@@ -466,6 +535,15 @@ def chat():
             font-size: 0.85em;
             opacity: 0.9;
             margin-top: 5px;
+        }
+        
+        .phase-indicator {
+            background: rgba(255,255,255,0.2);
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            margin-top: 8px;
+            display: inline-block;
         }
         
         .messages-container {
@@ -636,6 +714,15 @@ def chat():
         <div class="chat-header">
             <h1>💬 Tax Assistant Bot</h1>
             <p>Your personal tax eligibility advisor</p>
+            <div class="phase-indicator">
+                {% if not completed %}
+                    {% if phase == 1 %}
+                        📋 Phase 1/2: Tax Refunds Assessment
+                    {% else %}
+                        💰 Phase 2/2: Tax Savings Assessment
+                    {% endif %}
+                {% endif %}
+            </div>
         </div>
         
         <div class="messages-container" id="messages-container">
@@ -716,6 +803,8 @@ def chat():
                 
                 if (data.status === 'completed') {
                     window.location.reload();
+                } else if (data.status === 'phase_complete') {
+                    window.location.reload();
                 } else if (data.messages) {
                     data.messages.forEach(msg => {
                         addMessageToUI(msg.role, msg.content, msg.options);
@@ -782,7 +871,8 @@ def chat():
 </html>
 """, messages=session["messages"], 
          waiting_for_answer=session["waiting_for_answer"],
-         completed=session["completed"])
+         completed=session["completed"],
+         phase=session.get("phase", 1))
 
 @app.route("/send_message", methods=["POST"])
 def send_message():
@@ -807,46 +897,56 @@ def send_message():
         prop_questions = proposal_data["questions"]
         
         if prop_index < len(prop_questions):
-            # Save proposal answer
             prop_q = prop_questions[prop_index]
             answer_key = f"proposal_{proposal_data['original_ref']}_{prop_index}"
             
-            # Clean numeric if needed
             if prop_q.get("type") in ["numeric", "number", "price", "counter"]:
                 answer = clean_number(answer)
             
             session["answers"][answer_key] = answer
             
-            # Move to next proposal question
             proposal_data["current_index"] = prop_index + 1
             session["pending_proposal"] = proposal_data
             
             if prop_index + 1 >= len(prop_questions):
-                # All proposal questions answered, clear pending and continue
                 session["pending_proposal"] = None
                 session["waiting_for_answer"] = False
                 
-                # Continue with main flow - get next question from original handler
                 original_ref = proposal_data["original_ref"]
                 result = process_handler_next(original_ref, proposal_data["answer"])
                 
                 if result.get("status") == "completed":
                     complete_assessment()
                     return jsonify({"status": "completed"})
+                elif result.get("status") == "phase_complete":
+                    # Move to phase 2
+                    session["phase"] = 2
+                    session["current_ref"] = PHASE_2_QUESTIONS[0]
+                    session["phase_transition_shown"] = False
+                    session["waiting_for_answer"] = False
+                    show_phase_transition()
+                    process_next_question()
+                    return jsonify({"status": "phase_complete", "messages": session["messages"][-2:]})
                 elif result.get("next_ref"):
                     session["current_ref"] = result["next_ref"]
                     process_next_question()
                 else:
-                    # Try to go to next sequential question
-                    next_ref = str(int(original_ref) + 1)
-                    if get_question(next_ref):
-                        session["current_ref"] = next_ref
+                    next_ref = get_next_question_in_phase(original_ref)
+                    if next_ref.get("status") == "phase_complete":
+                        session["phase"] = 2
+                        session["current_ref"] = PHASE_2_QUESTIONS[0]
+                        session["phase_transition_shown"] = False
+                        session["waiting_for_answer"] = False
+                        show_phase_transition()
+                        process_next_question()
+                        return jsonify({"status": "phase_complete", "messages": session["messages"][-2:]})
+                    elif next_ref.get("next_ref"):
+                        session["current_ref"] = next_ref["next_ref"]
                         process_next_question()
                     else:
                         complete_assessment()
                         return jsonify({"status": "completed"})
             else:
-                # Ask next proposal question
                 session["waiting_for_answer"] = False
                 process_next_question()
             
@@ -863,19 +963,15 @@ def send_message():
         complete_assessment()
         return jsonify({"status": "completed"})
     
-    # Clean number if needed
     if question.get("type") in ["numeric", "number", "price", "counter"]:
         answer = clean_number(answer)
     
     # Check for proposal first
     proposal_questions = handle_proposal(current_ref, answer)
     if proposal_questions:
-        # Save the answer to the main question
         session["answers"][current_ref] = answer
         session["history"].append(current_ref)
         session["waiting_for_answer"] = False
-        
-        # Start proposal flow
         process_next_question()
         
         return jsonify({
@@ -898,8 +994,18 @@ def send_message():
     session["history"].append(current_ref)
     session["waiting_for_answer"] = False
     
+    # Handle phase complete
+    if result.get("status") == "phase_complete":
+        # Move to phase 2
+        session["phase"] = 2
+        session["current_ref"] = PHASE_2_QUESTIONS[0]
+        session["phase_transition_shown"] = False
+        show_phase_transition()
+        process_next_question()
+        return jsonify({"status": "phase_complete", "messages": session["messages"][-2:]})
+    
     # Handle completion
-    if result.get("status") == "completed" or result.get("completed"):
+    if result.get("status") == "completed":
         complete_assessment()
         return jsonify({"status": "completed"})
     
@@ -908,10 +1014,16 @@ def send_message():
         session["current_ref"] = result["next_ref"]
         process_next_question()
     else:
-        # Try to go to next sequential question
-        next_ref = str(int(current_ref) + 1)
-        if get_question(next_ref):
-            session["current_ref"] = next_ref
+        next_in_phase = get_next_question_in_phase(current_ref)
+        if next_in_phase.get("status") == "phase_complete":
+            session["phase"] = 2
+            session["current_ref"] = PHASE_2_QUESTIONS[0]
+            session["phase_transition_shown"] = False
+            show_phase_transition()
+            process_next_question()
+            return jsonify({"status": "phase_complete", "messages": session["messages"][-2:]})
+        elif next_in_phase.get("next_ref"):
+            session["current_ref"] = next_in_phase["next_ref"]
             process_next_question()
         else:
             complete_assessment()
