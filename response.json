@@ -38,7 +38,7 @@
       "options": ["Yes", "No"],
       "required": true,
       "infoTitle": "Commuting doesn't count",
-      "info": "Travelling for work does not include driving to the same place each time, like an office or other permenant place of work",
+      "info": "Travelling for work does not include driving to the same place each time, like an office or other permanent place of work",
       "value": "",
       "handlerNext": {
         "No": {
@@ -210,7 +210,6 @@
       "type": "counter",
       "field_name": "daysPerWeek",
       "name": "q_9",
-      "options": ["Yes", "No"],
       "required": true,
       "subTitle": "Days per week",
       "infoTitle": "Estimate your travel days",

@@ -43,12 +43,13 @@ Then open your browser to `http://127.0.0.1:5000/` to interact with the chatbot.
 - **Business Income**: 500, 1000, 2000, 3000, 5000, 10000 + "Other (specify)"
 - **Number of Dependents**: Free-form text input
 
-### Console Version
+### Console Testing
 
-Run the example:
+Run test files:
 
 ```bash
-py -3 main.py
+py -3 test_flow.py
+py -3 test_flow_smooth.py
 ```
 
-The engine will guide through the questions, skipping conditional ones based on previous answers.
+These scripts test the questionnaire flow and state machine engine.
