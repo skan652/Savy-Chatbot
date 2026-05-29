@@ -31,6 +31,32 @@ py -3 app.py
 
 Then open your browser to `http://127.0.0.1:5000/` to interact with the chatbot.
 
+#### ChatGPT Integration
+
+Set `AI_PROVIDER=chatgpt` and provide either `CHATGPT_API_KEY` or `OPENAI_API_KEY`.
+You can also optionally set `CHATGPT_MODEL` (default: `gpt-4o-mini`).
+
+Example environment variables:
+
+```bash
+set AI_PROVIDER=chatgpt
+set CHATGPT_API_KEY=your-key-here
+set CHATGPT_MODEL=gpt-4o-mini
+```
+
+#### Gemini Integration
+
+Set `AI_PROVIDER=gemini` and provide either `GOOGLE_API_KEY` or `GOOGLE_API_TOKEN`.
+You can optionally set `GOOGLE_MODEL` to a supported Gemini model such as `gemini-1.0` or `text-bison-001`.
+
+Example environment variables:
+
+```bash
+set AI_PROVIDER=gemini
+set GOOGLE_API_KEY=your-google-api-key
+set GOOGLE_MODEL=gemini-1.0
+```
+
 **Question Types:**
 - **Single-choice & Boolean**: Click on the numbered option buttons
 - **Numeric with Options**: Click predefined amounts or "Other (specify)" for custom input

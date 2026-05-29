@@ -6,6 +6,27 @@ import logging
 from datetime import datetime
 from functools import wraps
 import inspect
+import os
+
+# Load .env BEFORE importing ai_client to ensure env vars are set
+dotenv_path = os.path.join(os.getcwd(), ".env")
+if os.path.exists(dotenv_path):
+    try:
+        with open(dotenv_path, "r", encoding="utf-8") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    key = key.strip()
+                    value = value.strip().strip('"').strip("'")
+                    if key and key not in os.environ:
+                        os.environ[key] = value
+    except Exception as e:
+        print(f"Warning: Could not load .env file: {e}")
+
+from ai_client import AIClient
+
+ai_client = AIClient()
 
 app = Flask(__name__)
 app.secret_key = "savy-chatbot-secret-key"
@@ -794,9 +815,45 @@ def complete_assessment():
         
         answers = session.get("answers", {})
         
+        # Build plain text summary for AI and display
+        plain_summary = "Assessment Summary:\n\n"
+        for ref, answer in answers.items():
+            question = get_question(ref)
+            if question:
+                title = question.get("title", ref)
+                if callable(title):
+                    title = title(answers)
+                plain_summary += f"{title}\n→ {answer}\n\n"
+        
+        # Try to get AI summary
+        use_ai = os.environ.get("USE_AI", "").lower() in ["1", "true", "yes"]
+        provider = os.environ.get("AI_PROVIDER", "gemini").lower()
+        
+        chatgpt_creds = ai_client.chatgpt_key or ai_client.openai_key
+        google_creds = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GOOGLE_API_TOKEN")
+        
+        provider_enabled = (provider in ["openai", "chatgpt"] and chatgpt_creds) or \
+                           (provider in ["gemini", "google"] and google_creds)
+        
+        ai_summary = ""
+        if use_ai and provider_enabled:
+            try:
+                logger.info(f"Generating AI summary with provider: {provider}")
+                system_prompt = "You are a tax assessment assistant. Provide a concise, professional summary of the taxpayer's assessment in 2-3 sentences."
+                ai_summary = ai_client.generate(
+                    prompt=plain_summary,
+                    system_prompt=system_prompt,
+                    max_tokens=500,
+                    temperature=0.7
+                )
+                if ai_summary:
+                    logger.info("AI summary generated successfully")
+            except Exception as e:
+                logger.error(f"AI summary failed: {e}")
+        
+        # Build final message
         final_message = "🎉 **Assessment Complete!** 🎉\n\n"
         final_message += "=" * 50 + "\n\n"
-        
         final_message += "📊 **Summary of Your Responses:**\n\n"
         
         for ref, answer in answers.items():
@@ -807,6 +864,11 @@ def complete_assessment():
                     title = title(answers)
                 final_message += f"• **{title}**\n"
                 final_message += f"  → {answer}\n\n"
+        
+        if ai_summary:
+            final_message += "=" * 50 + "\n\n"
+            final_message += "🤖 **AI Assessment:**\n\n"
+            final_message += ai_summary + "\n\n"
         
         final_message += "=" * 50 + "\n\n"
         final_message += "📞 **Next Steps:**\n\n"

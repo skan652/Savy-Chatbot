@@ -2,33 +2,24 @@ import requests
 import json
 
 session = requests.Session()
+base = 'http://127.0.0.1:5000'
 
-# Restart
-r = session.post('http://127.0.0.1:5000/restart')
-print('Restart:', r.status_code, r.headers.get('Location'))
+# Restart session
+r = session.post(f"{base}/restart_chat")
+print('Restart:', r.status_code, r.text)
 
-# Answer: Full-time
-r = session.post('http://127.0.0.1:5000/answer', json={'answer': 'Full-time'})
-print('Full-time:', r.status_code, r.text)
+# Send an answer
+r = session.post(f"{base}/send_message", json={'answer': 'Full-time'})
+print('Send Full-time:', r.status_code, r.text)
 
-# Answer: UK resident (True)
-r = session.post('http://127.0.0.1:5000/answer', json={'answer': True})
-print('UK resident:', r.status_code, r.text)
+# Send boolean answer
+r = session.post(f"{base}/send_message", json={'answer': True})
+print('Send True:', r.status_code, r.text)
 
-# Get monthly_salary question
-r = session.get('http://127.0.0.1:5000/get_question')
-print('Current:', r.json().get('current_ref'))
-print(json.dumps(r.json(), indent=2))
+# Send numeric salary
+r = session.post(f"{base}/send_message", json={'answer': 2000})
+print('Send Salary:', r.status_code, r.text)
 
-# Answer salary
-r = session.post('http://127.0.0.1:5000/answer', json={'answer': 2000})
-print('Salary:', r.status_code, r.text)
-
-# Answer: other_income_sources = True
-r = session.post('http://127.0.0.1:5000/answer', json={'answer': True})
-print('Other income source:', r.status_code, r.text)
-
-# Get next question
-r = session.get('http://127.0.0.1:5000/get_question')
-print('Next question:', r.json().get('current_ref'))
-print(json.dumps(r.json(), indent=2))
+# Finalize with another boolean
+r = session.post(f"{base}/send_message", json={'answer': True})
+print('Send True 2:', r.status_code, r.text)
