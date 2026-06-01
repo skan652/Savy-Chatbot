@@ -983,11 +983,13 @@ def passkey_page():
         button { width: 100%; padding: 14px; background: linear-gradient(45deg, #a855f7, #ec4899); color: white; border: none; border-radius: 12px; font-size: 1.1em; cursor: pointer; font-weight: 600; }
         button:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(168, 85, 247, 0.3); }
         .pink-accent { color: #ec4899; font-weight: 600; }
+        .logo-container-passkey { margin-bottom: 20px; }
+        .savy-logo-passkey { width: 120px; height: auto; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>� Tax Assistant Bot</h1>
+        <div class="logo-container-passkey"><svg class="savy-logo-passkey" viewBox="0 0 120 40" xmlns="http://www.w3.org/2000/svg"><text x="0" y="28" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="#000000">SAVY</text><circle cx="45" cy="8" r="5" fill="#ec4899"/></svg></div>
         <p class="subtitle">Find out how much you can save in just <span class="pink-accent">1m</span></p>
         {% if error_message %}
             <div class="error">{{ error_message }}</div>
@@ -1245,6 +1247,8 @@ def chat():
         }
         
         .chat-header h1 { font-size: 1.5em; font-weight: 500; }
+        .logo-container { margin-bottom: 10px; }
+        .savy-logo { width: 140px; height: auto; }
         .chat-header p { font-size: 0.85em; opacity: 0.9; margin-top: 5px; }
         
         .phase-indicator { 
@@ -1318,7 +1322,12 @@ def chat():
             </button>
             
             <div class="chat-header">
-                <h1>💬 Tax Assistant Bot</h1>
+                <div class="logo-container">
+                    <svg class="savy-logo" viewBox="0 0 120 40" xmlns="http://www.w3.org/2000/svg">
+                        <text x="0" y="28" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="#1a1a2e">SAVY</text>
+                        <circle cx="45" cy="8" r="5" fill="#ec4899"/>
+                    </svg>
+                </div>
                 <p>Your personal tax eligibility advisor</p>
                 <div class="phase-indicator">
                     {% if not completed %}
@@ -1631,3 +1640,4 @@ def restart_chat():
 
 if __name__ == "__main__":
     app.run(debug=True, threaded=True)
+
