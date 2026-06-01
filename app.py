@@ -1336,8 +1336,9 @@ def chat():
                             {% if message.options %}
                                 <div class="options-container">
                                     {% for option in message.options %}
+                                        {% set display_option = ('✓ Yes' if option == 'Yes' else '✗ No' if option == 'No' else option) %}
                                         <button class="option-btn" onclick="sendMessage('{{ option | replace("'", "\\'") | replace("\\n", " ") }}')">
-                                            {{ option | replace('\\n', ' ') }}
+                                            {{ display_option | replace('\\n', ' ') }}
                                         </button>
                                     {% endfor %}
                                 </div>
@@ -1450,7 +1451,13 @@ def chat():
                 options.forEach(option => {
                     const btn = document.createElement('button');
                     btn.className = 'option-btn';
-                    btn.textContent = option.replace(/\\n/g, ' ');
+                    let displayText = option.replace(/\\n/g, ' ');
+                    if (displayText === 'Yes') {
+                        displayText = '✓ Yes';
+                    } else if (displayText === 'No') {
+                        displayText = '✗ No';
+                    }
+                    btn.textContent = displayText;
                     btn.onclick = () => {
                         // Remove selected class from all buttons in this container
                         optionsDiv.querySelectorAll('.option-btn').forEach(b => b.classList.remove('selected'));
