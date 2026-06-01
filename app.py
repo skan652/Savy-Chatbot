@@ -957,7 +957,7 @@ def passkey_page():
         * { box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: white;
             margin: 0;
             padding: 20px;
             min-height: 100vh;
@@ -974,25 +974,27 @@ def passkey_page():
             box-shadow: 0 20px 60px rgba(0,0,0,0.3);
             text-align: center;
         }
-        h1 { color: #333; margin-bottom: 10px; }
-        .subtitle { color: #666; margin-bottom: 30px; }
+        h1 { color: #000; margin-bottom: 10px; }
+        .subtitle { color: #000; margin-bottom: 30px; }
         .error { background: #fee; padding: 12px; border-radius: 12px; color: #c33; margin-bottom: 20px; }
-        input { width: 100%; padding: 14px; border: 2px solid #e0e0e0; border-radius: 12px; font-size: 1em; margin-bottom: 20px; }
-        input:focus { outline: none; border-color: #667eea; }
-        button { width: 100%; padding: 14px; background: linear-gradient(45deg, #667eea, #764ba2); color: white; border: none; border-radius: 12px; font-size: 1.1em; cursor: pointer; }
-        button:hover { transform: translateY(-2px); }
+        input { width: 100%; padding: 14px; border: 2px solid #e0e0e0; border-radius: 12px; font-size: 1em; margin-bottom: 20px; color: #000; }
+        input:focus { outline: none; border-color: #c665d8; }
+        input::placeholder { color: #999; }
+        button { width: 100%; padding: 14px; background: linear-gradient(45deg, #a855f7, #ec4899); color: white; border: none; border-radius: 12px; font-size: 1.1em; cursor: pointer; font-weight: 600; }
+        button:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(168, 85, 247, 0.3); }
+        .pink-accent { color: #ec4899; font-weight: 600; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🔐 Access Required</h1>
-        <p class="subtitle">Enter passkey to continue</p>
+        <h1>� Tax Assistant Bot</h1>
+        <p class="subtitle">Find out how much you can save in just <span class="pink-accent">1m</span></p>
         {% if error_message %}
             <div class="error">{{ error_message }}</div>
         {% endif %}
         <form method="POST" action="/verify_passkey">
             <input type="password" name="passkey" placeholder="Enter passkey" required autofocus>
-            <button type="submit">Verify →</button>
+            <button type="submit">Start</button>
         </form>
     </div>
 </body>
@@ -1101,7 +1103,7 @@ def chat():
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+            background: #808080; 
             height: 100vh; 
             overflow: hidden;
         }
@@ -1133,7 +1135,7 @@ def chat():
         .sidebar-header {
             padding: 20px;
             border-bottom: 1px solid #e0e0e0;
-            background: linear-gradient(45deg, #667eea, #764ba2);
+            background: linear-gradient(45deg, #a855f7, #ec4899);
             color: white;
         }
         
@@ -1165,9 +1167,9 @@ def chat():
         }
         
         .answer-item:hover {
-            background: #e8e8ea;
+            background: #f0f0f0;
             transform: translateX(-2px);
-            border-color: #667eea;
+            border-color: #a855f7;
         }
         
         .answer-question {
@@ -1179,7 +1181,7 @@ def chat():
         
         .answer-value {
             font-size: 0.9em;
-            color: #667eea;
+            color: #a855f7;
             font-weight: 500;
         }
         
@@ -1191,7 +1193,7 @@ def chat():
         }
         
         .edit-icon:hover {
-            color: #667eea;
+            color: #a855f7;
         }
         
         .no-answers {
@@ -1206,7 +1208,7 @@ def chat():
             flex: 1;
             display: flex;
             flex-direction: column;
-            background: #f7f7f8;
+            background: white;
             position: relative;
         }
         
@@ -1235,7 +1237,7 @@ def chat():
         }
         
         .chat-header {
-            background: linear-gradient(45deg, #667eea, #764ba2);
+            background: linear-gradient(45deg, #a855f7, #ec4899);
             color: white;
             padding: 20px;
             text-align: center;
@@ -1258,22 +1260,23 @@ def chat():
             flex: 1; 
             overflow-y: auto; 
             padding: 20px; 
-            background: #f7f7f8;
+            background: white;
         }
         
         .message { margin-bottom: 20px; display: flex; animation: fadeIn 0.3s ease-in; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .message.user { justify-content: flex-end; }
         .message-content { max-width: 70%; padding: 12px 16px; border-radius: 18px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
-        .message.user .message-content { background: linear-gradient(45deg, #667eea, #764ba2); color: white; border-bottom-right-radius: 4px; }
-        .message.assistant .message-content { background: white; color: #333; border-bottom-left-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+        .message.user .message-content { background: linear-gradient(45deg, #a855f7, #ec4899); color: white; border-bottom-right-radius: 4px; }
+        .message.assistant .message-content { background: #f5f5f5; color: #333; border-bottom-left-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
         .options-container { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 10px; }
-        .option-btn { background: #f0f0f0; border: 1px solid #ddd; padding: 8px 16px; border-radius: 20px; cursor: pointer; transition: all 0.2s; font-size: 0.9em; color: #333; }
-        .option-btn:hover { background: #667eea; border-color: #667eea; color: white; transform: translateY(-1px); }
+        .option-btn { background: white; border: 2px solid #e0e0e0; padding: 8px 16px; border-radius: 20px; cursor: pointer; transition: all 0.2s; font-size: 0.9em; color: #333; }
+        .option-btn:hover { background: #f5f5f5; border-color: #a855f7; transform: translateY(-1px); }
+        .option-btn.selected { background: white; border: 2px solid #ec4899; box-shadow: 0 0 0 3px rgba(236, 72, 153, 0.1); }
         .input-container { background: white; border-top: 1px solid #e0e0e0; padding: 20px; display: flex; gap: 10px; }
         .input-container input { flex: 1; padding: 12px; border: 1px solid #e0e0e0; border-radius: 24px; font-size: 1em; outline: none; }
-        .input-container input:focus { border-color: #667eea; }
-        .input-container button { background: linear-gradient(45deg, #667eea, #764ba2); color: white; border: none; padding: 12px 24px; border-radius: 24px; cursor: pointer; font-size: 1em; }
+        .input-container input:focus { border-color: #a855f7; }
+        .input-container button { background: linear-gradient(45deg, #a855f7, #ec4899); color: white; border: none; padding: 12px 24px; border-radius: 24px; cursor: pointer; font-size: 1em; font-weight: 600; }
         .input-container button:hover { transform: translateY(-1px); }
         .input-container button:disabled { opacity: 0.5; cursor: not-allowed; }
         .restart-btn { background: #f0f0f0; color: #666; margin-top: 10px; }
@@ -1448,7 +1451,13 @@ def chat():
                     const btn = document.createElement('button');
                     btn.className = 'option-btn';
                     btn.textContent = option.replace(/\\n/g, ' ');
-                    btn.onclick = () => sendMessage(option);
+                    btn.onclick = () => {
+                        // Remove selected class from all buttons in this container
+                        optionsDiv.querySelectorAll('.option-btn').forEach(b => b.classList.remove('selected'));
+                        // Add selected class to clicked button
+                        btn.classList.add('selected');
+                        sendMessage(option);
+                    };
                     optionsDiv.appendChild(btn);
                 });
                 contentDiv.appendChild(optionsDiv);
