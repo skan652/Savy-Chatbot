@@ -8,6 +8,7 @@ from typing import Optional, List, Dict
 logger = logging.getLogger(__name__)
 
 
+
 class AIClient:
     """
     Multi-provider AI Client supporting Gemini and OpenAI.

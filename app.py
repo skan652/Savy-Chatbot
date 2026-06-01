@@ -1290,8 +1290,6 @@ def chat():
         <!-- Sidebar -->
         <div class="sidebar {% if not sidebar_open %}closed{% endif %}" id="sidebar">
             <div class="sidebar-header">
-                <h3>📝 Your Responses</h3>
-                <p>Click any answer to edit</p>
             </div>
             <div class="answers-list" id="answers-list">
                 {% if answers_list %}
