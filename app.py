@@ -25,8 +25,14 @@ if os.path.exists(dotenv_path):
         print(f"Warning: Could not load .env file: {e}")
 
 from ai_client import AIClient
+from state_machine import StateMachineEngine
 
 ai_client = AIClient()
+state_engine = StateMachineEngine("response.json")
+
+# Enable AI summary generation by default
+if "USE_AI" not in os.environ:
+    os.environ["USE_AI"] = "true"
 
 app = Flask(__name__)
 app.secret_key = "savy-chatbot-secret-key"
@@ -403,9 +409,13 @@ def get_questions_list():
 QUESTIONS = get_questions_list()
 QUESTION_MAP = {str(q["ref"]): q for q in QUESTIONS}
 
-# Phase configuration
-PHASE_1_QUESTIONS = ["1", "2", "3", "4", "5", "6", "7", "8"]
-PHASE_2_QUESTIONS = ["9", "10", "11", "12", "13", "14", "15"]
+# Phase configuration - Refund vs Savings
+PHASE_1_QUESTIONS = ["1", "2", "3", "4", "5", "6", "7", "8"]  # Refund Assessment
+PHASE_2_QUESTIONS = ["9", "10", "11", "12", "13", "14", "15"]  # Savings Assessment
+PHASE_NAMES = {
+    1: "🔍 Refund Assessment",
+    2: "💰 Savings Assessment"
+}
 
 # =========================================================
 # SESSION MANAGEMENT
@@ -503,11 +513,20 @@ def evaluate_dynamic_handler(question, answer, all_answers):
     return None
 
 def process_handler_next(current_ref, answer):
-    """Process handlerNext with priority for dynamiqyeHandlerNext"""
+    """Process next question using StateMachineEngine"""
     try:
+        # First try the state engine from response.json (the flow diagram)
+        result = state_engine.get_next_question_ref(current_ref, answer)
+        
+        if result.get("status") == "success" and result.get("next_ref"):
+            return {"status": "success", "next_ref": result["next_ref"], "completed": False}
+        elif result.get("status") == "completed":
+            return {"status": "completed"}
+        
+        # Fallback: use the legacy handlerNext logic for backward compatibility
         question = get_question(current_ref)
         if not question:
-            return get_next_question_in_phase(current_ref)
+            return {"status": "completed"}
         
         all_answers = session.get("answers", {})
         
@@ -539,46 +558,39 @@ def process_handler_next(current_ref, answer):
                 
                 elif action == "open_question":
                     next_ref = str(handler.get("ref"))
-                    if get_question(next_ref) or next_ref in PHASE_1_QUESTIONS + PHASE_2_QUESTIONS:
-                        return {"status": "success", "next_ref": next_ref, "completed": False}
-                    return get_next_question_in_phase(current_ref)
+                    return {"status": "success", "next_ref": next_ref, "completed": False}
                 
                 elif action in ["to_save_and_finish", "to_save_and_finish_with_error"]:
                     return {"status": "completed"}
         
-        return get_next_question_in_phase(current_ref)
+        return {"status": "completed"}
             
     except Exception as e:
         logger.error(f"Error in process_handler_next: {e}")
-        return get_next_question_in_phase(current_ref)
+        return {"status": "completed"}
 
 def get_next_question_in_phase(current_ref):
-    """Safely get next question in current phase"""
+    """Get next question using StateMachineEngine to follow the flow diagram"""
     try:
-        if session.get("phase") == 1:
-            if current_ref in PHASE_1_QUESTIONS:
-                current_index = PHASE_1_QUESTIONS.index(current_ref)
-                if current_index + 1 < len(PHASE_1_QUESTIONS):
-                    next_ref = PHASE_1_QUESTIONS[current_index + 1]
-                    return {"status": "success", "next_ref": next_ref, "completed": False}
-                else:
-                    return {"status": "phase_complete"}
-            else:
-                for ref in PHASE_1_QUESTIONS:
-                    if ref not in session.get("history", []):
-                        return {"status": "success", "next_ref": ref, "completed": False}
-                return {"status": "phase_complete"}
+        # Use the state machine to determine the next question
+        # First, get the most recent answer
+        current_answer = session.get("answers", {}).get(current_ref)
+        
+        if current_answer is None:
+            # If no answer yet, just move to next question
+            return {"status": "success", "next_ref": current_ref, "completed": False}
+        
+        # Use the state engine to get next question based on current answer
+        result = state_engine.get_next_question_ref(current_ref, current_answer)
+        
+        if result.get("status") == "success" and result.get("next_ref"):
+            return {"status": "success", "next_ref": result["next_ref"], "completed": False}
+        elif result.get("status") == "completed":
+            return {"status": "completed"}
         else:
-            if current_ref in PHASE_2_QUESTIONS:
-                current_index = PHASE_2_QUESTIONS.index(current_ref)
-                if current_index + 1 < len(PHASE_2_QUESTIONS):
-                    next_ref = PHASE_2_QUESTIONS[current_index + 1]
-                    return {"status": "success", "next_ref": next_ref, "completed": False}
-                else:
-                    return {"status": "completed"}
-            else:
-                return {"status": "success", "next_ref": PHASE_2_QUESTIONS[0], "completed": False}
-                
+            # If no explicit handler, we're at the end
+            return {"status": "completed"}
+        
     except Exception as e:
         logger.error(f"Error in get_next_question_in_phase: {e}")
         return {"status": "completed"}
@@ -770,9 +782,10 @@ def show_phase_transition():
     """Show transition message between phases"""
     try:
         if session.get("phase") == 2 and not session.get("phase_transition_shown"):
-            transition_msg = "✅ **Thank you for completing the tax refunds section!**\n\n"
-            transition_msg += "Now let's move to the next step: **Tax Savings Assessment**.\n"
-            transition_msg += "Please answer the following questions about your travel and expenses.\n"
+            transition_msg = "✅ **Thank you for completing the Refund Assessment!**\n\n"
+            transition_msg += "---\n\n"
+            transition_msg += "Now let's move to the next step: **💰 Savings Assessment**\n"
+            transition_msg += "Please answer the following questions about your travel and expenses to calculate your potential tax savings.\n"
             transition_msg += "\n---\n"
             
             add_message("assistant", transition_msg)
@@ -814,9 +827,17 @@ def complete_assessment():
         session["waiting_for_answer"] = False
         
         answers = session.get("answers", {})
+        phase = session.get("phase", 1)
+        phase_name = PHASE_NAMES.get(phase, "Assessment")
+        
+        logger.info(f"\n{'='*70}")
+        logger.info(f"📊 COMPLETING ASSESSMENT - {phase_name}")
+        logger.info(f"{'='*70}")
+        logger.info(f"Answers count: {len(answers)}")
+        logger.info(f"Phase: {phase}")
         
         # Build plain text summary for AI and display
-        plain_summary = "Assessment Summary:\n\n"
+        plain_summary = f"{phase_name} Summary:\n\n"
         for ref, answer in answers.items():
             question = get_question(ref)
             if question:
@@ -829,30 +850,62 @@ def complete_assessment():
         use_ai = os.environ.get("USE_AI", "").lower() in ["1", "true", "yes"]
         provider = os.environ.get("AI_PROVIDER", "gemini").lower()
         
+        logger.info(f"USE_AI env var: {os.environ.get('USE_AI')}")
+        logger.info(f"USE_AI parsed: {use_ai}")
+        logger.info(f"Provider: {provider}")
+        
         chatgpt_creds = ai_client.chatgpt_key or ai_client.openai_key
         google_creds = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GOOGLE_API_TOKEN")
+        
+        logger.info(f"ChatGPT creds: {bool(chatgpt_creds)}")
+        logger.info(f"Google creds: {bool(google_creds)}")
         
         provider_enabled = (provider in ["openai", "chatgpt"] and chatgpt_creds) or \
                            (provider in ["gemini", "google"] and google_creds)
         
+        logger.info(f"Provider enabled: {provider_enabled}")
+        
         ai_summary = ""
         if use_ai and provider_enabled:
             try:
-                logger.info(f"Generating AI summary with provider: {provider}")
-                system_prompt = "You are a tax assessment assistant. Provide a concise, professional summary of the taxpayer's assessment in 2-3 sentences."
+                logger.info(f"\n{'='*70}")
+                logger.info(f"🤖 GENERATING AI SUMMARY")
+                logger.info(f"{'='*70}")
+                logger.info(f"Phase: {phase_name}")
+                logger.info(f"Provider: {provider.upper()}")
+                logger.info(f"{'='*70}\n")
+                
+                system_prompt = f"You are a {phase_name} assessment specialist. Provide a concise, professional summary of the user's {phase_name.lower()} in 2-3 sentences based on their responses."
+                
+                logger.info(f"📝 Summary Input:\n{plain_summary}\n")
+                logger.info(f"🔄 Calling ai_client.generate()...")
+                
                 ai_summary = ai_client.generate(
                     prompt=plain_summary,
                     system_prompt=system_prompt,
                     max_tokens=500,
                     temperature=0.7
                 )
+                
+                logger.info(f"AI response length: {len(ai_summary) if ai_summary else 0} chars")
+                logger.info(f"AI response empty: {not ai_summary}")
+                
                 if ai_summary:
-                    logger.info("AI summary generated successfully")
+                    logger.info(f"{'='*70}")
+                    logger.info(f"✅ AI SUMMARY GENERATED SUCCESSFULLY")
+                    logger.info(f"{'='*70}\n")
+                    logger.info(f"🎯 AI SUMMARY:\n{ai_summary}\n")
+                    logger.info(f"{'='*70}\n")
+                else:
+                    logger.warning("⚠️  AI summary was empty")
+                    
             except Exception as e:
-                logger.error(f"AI summary failed: {e}")
+                logger.error(f"❌ AI summary failed: {e}", exc_info=True)
+        else:
+            logger.warning(f"⚠️  Skipping AI summary: use_ai={use_ai}, provider_enabled={provider_enabled}")
         
         # Build final message
-        final_message = "🎉 **Assessment Complete!** 🎉\n\n"
+        final_message = f"🎉 **{phase_name} Complete!** 🎉\n\n"
         final_message += "=" * 50 + "\n\n"
         final_message += "📊 **Summary of Your Responses:**\n\n"
         
@@ -869,6 +922,8 @@ def complete_assessment():
             final_message += "=" * 50 + "\n\n"
             final_message += "🤖 **AI Assessment:**\n\n"
             final_message += ai_summary + "\n\n"
+        else:
+            logger.warning("❌ No AI summary to add to final message")
         
         final_message += "=" * 50 + "\n\n"
         final_message += "📞 **Next Steps:**\n\n"
@@ -879,8 +934,11 @@ def complete_assessment():
         add_message("assistant", final_message)
         session.modified = True
         
+        logger.info(f"✅ Assessment complete and message added to session")
+        logger.info(f"{'='*70}\n")
+        
     except Exception as e:
-        logger.error(f"Error in complete_assessment: {e}")
+        logger.error(f"Error in complete_assessment: {e}", exc_info=True)
         add_message("assistant", "Thank you for completing the assessment!")
 
 def format_answer_for_display(question, answer):
@@ -1075,8 +1133,12 @@ def chat():
     
     if not session["messages"] and not session["completed"]:
         welcome_msg = "🌅 **Good morning!**\n\n"
-        welcome_msg += "Please answer a few questions to determine how eligible you are for a tax refund and tax savings.\n\n"
-        welcome_msg += "Let's start with the **Tax Refunds Assessment**."
+        welcome_msg += "Welcome to the **Tax Assessment Bot**! We'll help you determine your eligibility for tax refunds and identify tax-saving opportunities.\n\n"
+        welcome_msg += "**📋 Phase 1: Refund Assessment** (5-10 questions)\n"
+        welcome_msg += "First, we'll check if you're eligible for a tax refund based on your income and employment.\n\n"
+        welcome_msg += "**💰 Phase 2: Savings Assessment** (5-10 questions)\n"
+        welcome_msg += "Then, we'll calculate potential tax savings based on your travel and business expenses.\n\n"
+        welcome_msg += "Let's get started! 🚀"
         add_message("assistant", welcome_msg)
         process_next_question()
     
@@ -1432,11 +1494,13 @@ def chat():
             .then(response => response.json())
             .then(data => {
                 setInputEnabled(true);
-                if (data.status === 'completed' || data.status === 'phase_complete') {
-                    window.location.reload();
-                } else if (data.messages) {
+                if (data.messages) {
                     data.messages.forEach(msg => addMessageToUI(msg.role, msg.content, msg.options));
                     scrollToBottom();
+                }
+                if (data.status === 'completed' || data.status === 'phase_complete') {
+                    setTimeout(() => window.location.reload(), 800);
+                } else if (data.messages) {
                     // Refresh page to update sidebar
                     setTimeout(() => window.location.reload(), 500);
                 }
@@ -1556,7 +1620,7 @@ def send_message():
                 
                 if result.get("status") == "completed":
                     complete_assessment()
-                    return jsonify({"status": "completed"})
+                    return jsonify({"status": "completed", "messages": session["messages"][-1:]})
                 elif result.get("status") == "phase_complete":
                     session["phase"] = 2
                     session["current_ref"] = PHASE_2_QUESTIONS[0]
@@ -1569,7 +1633,7 @@ def send_message():
                     process_next_question()
                 else:
                     complete_assessment()
-                    return jsonify({"status": "completed"})
+                    return jsonify({"status": "completed", "messages": session["messages"][-1:]})
             else:
                 session["waiting_for_answer"] = False
                 process_next_question()
@@ -1611,7 +1675,8 @@ def send_message():
     
     if result.get("status") == "completed":
         complete_assessment()
-        return jsonify({"status": "completed"})
+        # Return the completion message so it shows immediately before reload
+        return jsonify({"status": "completed", "messages": session["messages"][-1:]})
     
     elif result.get("status") == "phase_complete":
         session["phase"] = 2
@@ -1627,7 +1692,7 @@ def send_message():
     
     else:
         complete_assessment()
-        return jsonify({"status": "completed"})
+        return jsonify({"status": "completed", "messages": session["messages"][-1:]})
     
     return jsonify({"status": "success", "messages": session["messages"][-1:]})
 

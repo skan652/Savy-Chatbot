@@ -91,7 +91,13 @@
       "infoTitle": "Estimate your mileage",
       "info": "Don't worry this doesn't have to be exact right now.",
       "placeholder": "Ex - 8,000",
-      "value": ""
+      "value": "",
+      "handlerNext": {
+        "default": {
+          "action": "open_question",
+          "ref": "5"
+        }
+      }
     },
     {
       "ref": "5",
@@ -214,7 +220,13 @@
       "subTitle": "Days per week",
       "infoTitle": "Estimate your travel days",
       "info": "This may not be the same number every week, so you can estimate the average number of days a week.",
-      "value": ""
+      "value": "",
+      "handlerNext": {
+        "default": {
+          "action": "open_question",
+          "ref": "10"
+        }
+      }
     },
     {
       "ref": "10",
@@ -228,7 +240,13 @@
       "infoTitle": "Estimate your spend",
       "info": "It might not be the same every day, just give us an average for now.",
       "placeholder": "Ex - £10",
-      "value": ""
+      "value": "",
+      "handlerNext": {
+        "default": {
+          "action": "open_question",
+          "ref": "11"
+        }
+      }
     },
     {
       "ref": "11",
@@ -276,7 +294,13 @@
       "placeholder": "Ex - £5",
       "infoTitle": "Estimate your spend",
       "info": "It might not be the same every day, just give us an average for now.",
-      "value": ""
+      "value": "",
+      "handlerNext": {
+        "default": {
+          "action": "open_question",
+          "ref": "13"
+        }
+      }
     },
     {
       "ref": "13",
