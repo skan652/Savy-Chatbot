@@ -7,6 +7,7 @@ from datetime import datetime
 from functools import wraps
 import inspect
 import os
+import time
 
 # Load .env BEFORE importing ai_client to ensure env vars are set
 dotenv_path = os.path.join(os.getcwd(), ".env")
@@ -45,6 +46,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 VALID_PASSKEYS = ["12345", "pass123"]
+
+# SAVY Brand Color
+SAVY_PINK = "#d63384"
+SAVY_GRADIENT = f"linear-gradient(45deg, {SAVY_PINK}, #a02070)"
 
 # =========================================================
 # LOAD QUESTIONS
@@ -821,7 +826,7 @@ def run_xhr_params(question, answer, current_ref):
         logger.error(f"Error in xhrParams for {current_ref}: {e}")
 
 def complete_assessment():
-    """Complete assessment and show results"""
+    """Complete assessment and show results with clear AI integration"""
     try:
         session["completed"] = True
         session["waiting_for_answer"] = False
@@ -846,7 +851,7 @@ def complete_assessment():
                     title = title(answers)
                 plain_summary += f"{title}\n→ {answer}\n\n"
         
-        # Try to get AI summary
+        # Try to get AI summary with clear logging
         use_ai = os.environ.get("USE_AI", "").lower() in ["1", "true", "yes"]
         provider = os.environ.get("AI_PROVIDER", "gemini").lower()
         
@@ -865,6 +870,10 @@ def complete_assessment():
         
         logger.info(f"Provider enabled: {provider_enabled}")
         
+        # Add a "AI is thinking" message that will be shown in the UI
+        thinking_message = "🤖 **AI Assistant is analyzing your responses...**\n\n*This may take a moment while I generate your personalized tax assessment.*"
+        add_message("assistant", thinking_message)
+        
         ai_summary = ""
         if use_ai and provider_enabled:
             try:
@@ -879,6 +888,9 @@ def complete_assessment():
                 
                 logger.info(f"📝 Summary Input:\n{plain_summary}\n")
                 logger.info(f"🔄 Calling ai_client.generate()...")
+                
+                # Simulate a small delay to make AI processing visible
+                time.sleep(0.8)
                 
                 ai_summary = ai_client.generate(
                     prompt=plain_summary,
@@ -901,10 +913,15 @@ def complete_assessment():
                     
             except Exception as e:
                 logger.error(f"❌ AI summary failed: {e}", exc_info=True)
+                ai_summary = None
         else:
             logger.warning(f"⚠️  Skipping AI summary: use_ai={use_ai}, provider_enabled={provider_enabled}")
         
-        # Build final message
+        # Build final message - remove the thinking message and replace with real content
+        # Remove the thinking message from messages list
+        if session["messages"] and "AI Assistant is analyzing your responses" in session["messages"][-1].get("content", ""):
+            session["messages"].pop()
+        
         final_message = f"🎉 **{phase_name} Complete!** 🎉\n\n"
         final_message += "=" * 50 + "\n\n"
         final_message += "📊 **Summary of Your Responses:**\n\n"
@@ -920,10 +937,16 @@ def complete_assessment():
         
         if ai_summary:
             final_message += "=" * 50 + "\n\n"
-            final_message += "🤖 **AI Assessment:**\n\n"
-            final_message += ai_summary + "\n\n"
+            final_message += "🤖 **AI-Powered Assessment:**\n\n"
+            final_message += f"✨ *Based on your responses, our AI has generated the following personalized analysis:* ✨\n\n"
+            final_message += f"> {ai_summary}\n\n"
+            final_message += "---\n\n"
+            final_message += "💡 *This AI-generated summary helps our tax specialists better understand your situation.*\n\n"
         else:
             logger.warning("❌ No AI summary to add to final message")
+            final_message += "=" * 50 + "\n\n"
+            final_message += "📝 **Assessment Note:**\n\n"
+            final_message += "Your responses have been recorded and will be reviewed by our tax team.\n\n"
         
         final_message += "=" * 50 + "\n\n"
         final_message += "📞 **Next Steps:**\n\n"
@@ -1036,18 +1059,18 @@ def passkey_page():
         .subtitle { color: #000; margin-bottom: 30px; }
         .error { background: #fee; padding: 12px; border-radius: 12px; color: #c33; margin-bottom: 20px; }
         input { width: 100%; padding: 14px; border: 2px solid #e0e0e0; border-radius: 12px; font-size: 1em; margin-bottom: 20px; color: #000; }
-        input:focus { outline: none; border-color: #c665d8; }
+        input:focus { outline: none; border-color: #d63384; }
         input::placeholder { color: #999; }
-        button { width: 100%; padding: 14px; background: linear-gradient(45deg, #a855f7, #ec4899); color: white; border: none; border-radius: 12px; font-size: 1.1em; cursor: pointer; font-weight: 600; }
-        button:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(168, 85, 247, 0.3); }
-        .pink-accent { color: #ec4899; font-weight: 600; }
+        button { width: 100%; padding: 14px; background: linear-gradient(45deg, #d63384, #a02070); color: white; border: none; border-radius: 12px; font-size: 1.1em; cursor: pointer; font-weight: 600; }
+        button:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(214, 51, 132, 0.3); }
+        .pink-accent { color: #d63384; font-weight: 600; }
         .logo-container-passkey { margin-bottom: 20px; }
         .savy-logo-passkey { width: 120px; height: auto; }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="logo-container-passkey"><svg class="savy-logo-passkey" viewBox="0 0 120 40" xmlns="http://www.w3.org/2000/svg"><text x="0" y="28" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="#000000">SAVY</text><circle cx="45" cy="8" r="5" fill="#ec4899"/></svg></div>
+        <div class="logo-container-passkey"><svg class="savy-logo-passkey" viewBox="0 0 120 40" xmlns="http://www.w3.org/2000/svg"><text x="0" y="28" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="#000000">SAVY</text><circle cx="45" cy="8" r="5" fill="#d63384"/></svg></div>
         <p class="subtitle">Find out how much you can save in just <span class="pink-accent">1m</span></p>
         {% if error_message %}
             <div class="error">{{ error_message }}</div>
@@ -1081,49 +1104,105 @@ def toggle_sidebar():
     session.modified = True
     return jsonify({"sidebar_open": session["sidebar_open"]})
 
+# =========================================================
+# FIXED EDIT_ANSWER ROUTE - Properly resets the conversation
+# =========================================================
 @app.route("/edit_answer", methods=["POST"])
 @safe_route
 def edit_answer():
     data = request.get_json()
     ref = data.get("ref")
     
-    if ref and ref in session.get("history", []):
-        # Remove this answer and all subsequent answers
-        history = session["history"]
-        if ref in history:
-            ref_index = history.index(ref)
-            # Remove answers from this point forward
-            answers_to_remove = history[ref_index:]
-            for removed_ref in answers_to_remove:
-                if removed_ref in session["answers"]:
-                    del session["answers"][removed_ref]
+    if not ref:
+        return jsonify({"status": "error", "message": "No reference provided"})
+    
+    history = session.get("history", [])
+    if ref not in history:
+        return jsonify({"status": "error", "message": "Answer not found"})
+    
+    try:
+        # Find the index of the question to edit
+        ref_index = history.index(ref)
+        
+        # Remove all answers from this point forward
+        answers_to_remove = history[ref_index:]
+        for removed_ref in answers_to_remove:
+            if removed_ref in session["answers"]:
+                del session["answers"][removed_ref]
+            # Remove any proposal answers
+            proposal_keys = [k for k in session["answers"].keys() if k.startswith(f"proposal_{removed_ref}")]
+            for key in proposal_keys:
+                del session["answers"][key]
+        
+        # Trim history
+        session["history"] = history[:ref_index]
+        
+        # Reset phase if needed - if editing a Phase 1 question, go back to Phase 1
+        if ref in PHASE_1_QUESTIONS:
+            session["phase"] = 1
+            session["phase_transition_shown"] = False
+        elif ref in PHASE_2_QUESTIONS:
+            session["phase"] = 2
+        
+        # Set current question to the one being edited
+        session["current_ref"] = ref
+        session["waiting_for_answer"] = False
+        session["pending_proposal"] = None
+        
+        # Find and remove messages after this question
+        msg_index_to_keep = -1
+        
+        # First try to find the message containing this exact question
+        question_obj = get_question(ref)
+        if question_obj:
+            title = question_obj.get("title", "")
+            if callable(title):
+                title = title(session.get("answers", {}))
             
-            # Update history
-            session["history"] = history[:ref_index]
-            
-            # Set current question to the edited one
-            session["current_ref"] = ref
-            session["waiting_for_answer"] = False
-            
-            # Clear messages from this point forward
-            # Find the message index for this question
-            msg_index = -1
+            for i, msg in enumerate(session["messages"]):
+                if msg.get("role") == "assistant" and title and title in msg.get("content", ""):
+                    msg_index_to_keep = i
+                    break
+        
+        # If not found, try to find by answer reference
+        if msg_index_to_keep == -1:
             for i, msg in enumerate(session["messages"]):
                 if msg.get("role") == "assistant" and ref in msg.get("content", ""):
-                    msg_index = i
+                    msg_index_to_keep = i
                     break
+        
+        # If still not found, keep messages up to the answer
+        if msg_index_to_keep == -1:
+            answer_value = session["answers"].get(ref) if ref in session["answers"] else None
+            for i, msg in enumerate(session["messages"]):
+                if msg.get("role") == "user" and answer_value and answer_value in msg.get("content", ""):
+                    msg_index_to_keep = i - 1
+                    break
+        
+        if msg_index_to_keep >= 0:
+            session["messages"] = session["messages"][:msg_index_to_keep]
+        
+        session.modified = True
+        
+        # Now show the question again with an edit indicator
+        question = get_question(ref)
+        if question:
+            question_text = get_question_text(question)
+            options = get_options(question)
+            input_type = get_question_type(question)
             
-            if msg_index >= 0:
-                session["messages"] = session["messages"][:msg_index]
-            
+            # Add an edit indicator and re-ask the question
+            add_message("assistant", f"✏️ **Editing your answer to:**\n\n{question_text}", options, input_type)
+            session["waiting_for_answer"] = True
             session.modified = True
             
-            # Process next question (the edited one)
-            process_next_question()
-            
             return jsonify({"status": "success", "current_ref": ref})
-    
-    return jsonify({"status": "error", "message": "Could not edit answer"})
+        
+        return jsonify({"status": "error", "message": "Question not found"})
+        
+    except Exception as e:
+        logger.error(f"Error in edit_answer: {e}")
+        return jsonify({"status": "error", "message": str(e)})
 
 @app.route("/chat")
 @safe_route
@@ -1167,7 +1246,7 @@ def chat():
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
-            background: #808080; 
+            background: #f5f5f5; 
             height: 100vh; 
             overflow: hidden;
         }
@@ -1179,52 +1258,66 @@ def chat():
             width: 100%;
         }
         
-        /* Sidebar styles */
+        /* Sidebar styles - NO TOP BAR, logo moved here and centered */
         .sidebar {
             width: 280px;
             background: white;
             border-right: 1px solid #e0e0e0;
             display: flex;
             flex-direction: column;
-            transition: transform 0.3s ease;
             box-shadow: 2px 0 8px rgba(0,0,0,0.05);
             z-index: 10;
+            overflow-y: auto;
         }
         
-        .sidebar.closed {
-            transform: translateX(-280px);
-            position: absolute;
-        }
-        
-        .sidebar-header {
-            padding: 20px;
+        /* Logo section in sidebar - CENTERED */
+        .sidebar-logo {
+            padding: 32px 20px;
+            text-align: center;
             border-bottom: 1px solid #e0e0e0;
-            background: linear-gradient(45deg, #a855f7, #ec4899);
+            background: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .savy-logo-sidebar {
+            width: 160px;
+            height: auto;
+            display: block;
+        }
+        
+        /* Sidebar header with answers title - CENTERED */
+        .sidebar-header {
+            padding: 16px 20px;
+            background: #d63384;
             color: white;
+            text-align: center;
         }
         
         .sidebar-header h3 {
-            font-size: 1.1em;
-            font-weight: 500;
-            margin-bottom: 5px;
+            font-size: 0.95em;
+            font-weight: 600;
+            margin-bottom: 4px;
         }
         
         .sidebar-header p {
-            font-size: 0.8em;
-            opacity: 0.9;
+            font-size: 0.7em;
+            opacity: 0.85;
         }
         
         .answers-list {
             flex: 1;
             overflow-y: auto;
-            padding: 15px;
+            padding: 12px;
         }
         
+        /* Optimized answer items - more compact */
         .answer-item {
             background: #f7f7f8;
-            border-radius: 10px;
-            padding: 12px;
-            margin-bottom: 12px;
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin-bottom: 10px;
             cursor: pointer;
             transition: all 0.2s;
             border: 1px solid #e0e0e0;
@@ -1233,41 +1326,43 @@ def chat():
         .answer-item:hover {
             background: #f0f0f0;
             transform: translateX(-2px);
-            border-color: #a855f7;
+            border-color: #d63384;
         }
         
         .answer-question {
-            font-size: 0.85em;
-            font-weight: 500;
-            color: #333;
-            margin-bottom: 6px;
+            font-size: 0.75em;
+            font-weight: 600;
+            color: #555;
+            margin-bottom: 4px;
+            letter-spacing: -0.2px;
         }
         
         .answer-value {
-            font-size: 0.9em;
-            color: #a855f7;
+            font-size: 0.85em;
+            color: #d63384;
             font-weight: 500;
+            word-break: break-word;
         }
         
         .edit-icon {
             float: right;
-            color: #999;
-            font-size: 0.8em;
+            color: #bbb;
+            font-size: 0.7em;
             cursor: pointer;
         }
         
         .edit-icon:hover {
-            color: #a855f7;
+            color: #d63384;
         }
         
         .no-answers {
             text-align: center;
             color: #999;
             padding: 20px;
-            font-size: 0.9em;
+            font-size: 0.8em;
         }
         
-        /* Chat container styles */
+        /* Chat container - full height, no top bar */
         .chat-container {
             flex: 1;
             display: flex;
@@ -1276,89 +1371,247 @@ def chat():
             position: relative;
         }
         
-        .toggle-sidebar-btn {
-            position: absolute;
-            left: 20px;
-            top: 20px;
-            background: white;
-            border: none;
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            cursor: pointer;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            z-index: 20;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.2em;
-            transition: all 0.2s;
-        }
-        
-        .toggle-sidebar-btn:hover {
-            transform: scale(1.05);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        }
-        
-        .chat-header {
-            background: linear-gradient(45deg, #a855f7, #ec4899);
-            color: white;
-            padding: 20px;
-            text-align: center;
-            margin-left: 60px;
-        }
-        
-        .chat-header h1 { font-size: 1.5em; font-weight: 500; }
-        .logo-container { margin-bottom: 10px; }
-        .savy-logo { width: 140px; height: auto; }
-        .chat-header p { font-size: 0.85em; opacity: 0.9; margin-top: 5px; }
-        
-        .phase-indicator { 
-            background: rgba(255,255,255,0.2); 
-            padding: 5px 12px; 
-            border-radius: 20px; 
-            font-size: 0.8em; 
-            margin-top: 8px; 
-            display: inline-block; 
-        }
+        /* No chat header - removed completely */
         
         .messages-container { 
             flex: 1; 
             overflow-y: auto; 
-            padding: 20px; 
+            padding: 20px 24px; 
             background: white;
         }
         
-        .message { margin-bottom: 20px; display: flex; animation: fadeIn 0.3s ease-in; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        /* Slower, more deliberate animation for message transitions */
+        .message { 
+            margin-bottom: 20px; 
+            display: flex; 
+            animation: slowFadeInUp 0.8s cubic-bezier(0.2, 0.9, 0.4, 1.1) forwards;
+            opacity: 0;
+        }
+        @keyframes slowFadeInUp { 
+            from { 
+                opacity: 0; 
+                transform: translateY(30px); 
+            } 
+            to { 
+                opacity: 1; 
+                transform: translateY(0); 
+            } 
+        }
+        
         .message.user { justify-content: flex-end; }
-        .message-content { max-width: 70%; padding: 12px 16px; border-radius: 18px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
-        .message.user .message-content { background: linear-gradient(45deg, #a855f7, #ec4899); color: white; border-bottom-right-radius: 4px; }
-        .message.assistant .message-content { background: #f5f5f5; color: #333; border-bottom-left-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
-        .options-container { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 10px; }
-        .option-btn { background: white; border: 2px solid #e0e0e0; padding: 8px 16px; border-radius: 20px; cursor: pointer; transition: all 0.2s; font-size: 0.9em; color: #333; }
-        .option-btn:hover { background: #f5f5f5; border-color: #a855f7; transform: translateY(-1px); }
-        .option-btn.selected { background: white; border: 2px solid #ec4899; box-shadow: 0 0 0 3px rgba(236, 72, 153, 0.1); }
-        .input-container { background: white; border-top: 1px solid #e0e0e0; padding: 20px; display: flex; gap: 10px; }
-        .input-container input { flex: 1; padding: 12px; border: 1px solid #e0e0e0; border-radius: 24px; font-size: 1em; outline: none; }
-        .input-container input:focus { border-color: #a855f7; }
-        .input-container button { background: linear-gradient(45deg, #a855f7, #ec4899); color: white; border: none; padding: 12px 24px; border-radius: 24px; cursor: pointer; font-size: 1em; font-weight: 600; }
-        .input-container button:hover { transform: translateY(-1px); }
-        .input-container button:disabled { opacity: 0.5; cursor: not-allowed; }
-        .restart-btn { background: #f0f0f0; color: #666; margin-top: 10px; }
+        
+        /* Optimized message content font sizes */
+        .message-content { 
+            max-width: 75%; 
+            padding: 10px 16px; 
+            border-radius: 18px; 
+            line-height: 1.45; 
+            white-space: pre-wrap; 
+            word-wrap: break-word;
+            border: 1px solid #e0e0e0;
+            font-size: 0.9em;
+        }
+        .message.user .message-content { 
+            background: white; 
+            color: #333; 
+            border-bottom-right-radius: 4px;
+            border-color: #d63384;
+        }
+        .message.assistant .message-content { 
+            background: #f5f5f5; 
+            color: #333; 
+            border-bottom-left-radius: 4px; 
+            border-color: #e0e0e0;
+        }
+        
+        .options-container { 
+            margin-top: 10px; 
+            display: flex; 
+            flex-wrap: wrap; 
+            gap: 8px; 
+        }
+        .option-btn { 
+            background: white; 
+            border: 1.5px solid #d63384; 
+            padding: 6px 14px; 
+            border-radius: 20px; 
+            cursor: pointer; 
+            transition: all 0.2s; 
+            font-size: 0.8em; 
+            color: #d63384;
+            font-weight: 500;
+        }
+        .option-btn:hover { 
+            background: #d63384; 
+            color: white; 
+            transform: translateY(-1px); 
+        }
+        .option-btn.selected { 
+            background: #d63384; 
+            color: white; 
+            border-color: #d63384; 
+        }
+        
+        .input-container { 
+            background: white; 
+            border-top: 1px solid #e0e0e0; 
+            padding: 16px 20px; 
+            display: flex; 
+            gap: 12px; 
+        }
+        .input-container input { 
+            flex: 1; 
+            padding: 10px 16px; 
+            border: 1.5px solid #e0e0e0; 
+            border-radius: 24px; 
+            font-size: 0.9em; 
+            outline: none; 
+        }
+        .input-container input:focus { 
+            border-color: #d63384; 
+        }
+        .input-container button { 
+            background: white; 
+            color: #d63384; 
+            border: 1.5px solid #d63384; 
+            padding: 10px 20px; 
+            border-radius: 24px; 
+            cursor: pointer; 
+            font-size: 0.9em; 
+            font-weight: 600; 
+            transition: all 0.2s;
+        }
+        .input-container button:hover { 
+            background: #d63384; 
+            color: white; 
+            transform: translateY(-1px); 
+        }
+        .input-container button:disabled { 
+            opacity: 0.5; 
+            cursor: not-allowed; 
+            transform: none; 
+        }
+        
+        .restart-btn { 
+            background: white; 
+            color: #666; 
+            border: 1.5px solid #e0e0e0; 
+            margin-top: 0;
+            width: 100%;
+        }
+        .restart-btn:hover { 
+            background: #f5f5f5; 
+            color: #333; 
+            border-color: #d63384;
+            transform: translateY(-1px); 
+        }
+        
+        /* AI Thinking / Processing Indicator */
+        .ai-thinking {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 16px;
+            background: white;
+            border-radius: 20px;
+            border-bottom-left-radius: 4px;
+            border: 1px solid #e0e0e0;
+        }
+        .ai-spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid #f0f0f0;
+            border-top: 2px solid #d63384;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .ai-thinking-text {
+            font-size: 0.8em;
+            color: #d63384;
+            font-weight: 500;
+        }
+        .ai-pulse {
+            animation: subtlePulse 1.2s ease-in-out infinite;
+        }
+        @keyframes subtlePulse {
+            0%, 100% { opacity: 0.6; }
+            50% { opacity: 1; }
+        }
+        
+        /* Typing indicator */
+        .typing-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 8px 14px;
+            background: #f5f5f5;
+            border-radius: 18px;
+            border-bottom-left-radius: 4px;
+            border: 1px solid #e0e0e0;
+        }
+        .typing-dot {
+            width: 7px;
+            height: 7px;
+            background: #d63384;
+            border-radius: 50%;
+            animation: typingPulse 1.2s infinite ease-in-out;
+        }
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes typingPulse {
+            0%, 60%, 100% { transform: scale(0.6); opacity: 0.4; }
+            30% { transform: scale(1); opacity: 1; }
+        }
+        
+        /* Scrollbar styling */
+        .answers-list::-webkit-scrollbar,
+        .messages-container::-webkit-scrollbar {
+            width: 5px;
+        }
+        .answers-list::-webkit-scrollbar-track,
+        .messages-container::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        .answers-list::-webkit-scrollbar-thumb,
+        .messages-container::-webkit-scrollbar-thumb {
+            background: #ccc;
+            border-radius: 3px;
+        }
+        .answers-list::-webkit-scrollbar-thumb:hover,
+        .messages-container::-webkit-scrollbar-thumb:hover {
+            background: #d63384;
+        }
         
         @media (max-width: 768px) { 
             .message-content { max-width: 85%; } 
-            .input-container { padding: 15px; }
+            .input-container { padding: 12px 16px; }
             .sidebar { width: 260px; }
+            .savy-logo-sidebar { width: 130px; }
+            .messages-container { padding: 16px; }
+            .sidebar-logo { padding: 24px 20px; }
         }
     </style>
 </head>
 <body>
     <div class="app-container">
-        <!-- Sidebar -->
-        <div class="sidebar {% if not sidebar_open %}closed{% endif %}" id="sidebar">
+        <!-- Sidebar - with centered logo and centered answers header -->
+        <div class="sidebar" id="sidebar">
+            <!-- SAVY Logo - CENTERED -->
+            <div class="sidebar-logo">
+                <svg class="savy-logo-sidebar" viewBox="0 0 200 60" xmlns="http://www.w3.org/2000/svg">
+                    <text x="50%" y="42" text-anchor="middle" font-family="Arial, sans-serif" font-size="42" font-weight="bold" fill="#1a1a2e">SAVY</text>
+                    <circle cx="50%" cy="12" r="7" fill="#d63384"/>
+                </svg>
+            </div>
+            
+            <!-- Your Answers header - CENTERED -->
             <div class="sidebar-header">
+                <h3>📋 Your Answers</h3>
+                <p>Click any answer to edit</p>
             </div>
             <div class="answers-list" id="answers-list">
                 {% if answers_list %}
@@ -1377,31 +1630,11 @@ def chat():
             </div>
         </div>
         
-        <!-- Chat Container -->
+        <!-- Chat Container - No top bar -->
         <div class="chat-container">
-            <button class="toggle-sidebar-btn" onclick="toggleSidebar()">
-                {% if sidebar_open %}◀{% else %}▶{% endif %}
-            </button>
-            
-            <div class="chat-header">
-                <div class="logo-container">
-                    <svg class="savy-logo" viewBox="0 0 120 40" xmlns="http://www.w3.org/2000/svg">
-                        <text x="0" y="28" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="#1a1a2e">SAVY</text>
-                        <circle cx="45" cy="8" r="5" fill="#ec4899"/>
-                    </svg>
-                </div>
-                <p>Your personal tax eligibility advisor</p>
-                <div class="phase-indicator">
-                    {% if not completed %}
-                        {% if phase == 1 %}📋 Phase 1/2: Tax Refunds Assessment
-                        {% else %}💰 Phase 2/2: Tax Savings Assessment{% endif %}
-                    {% endif %}
-                </div>
-            </div>
-            
             <div class="messages-container" id="messages-container">
                 {% for message in messages %}
-                    <div class="message {{ message.role }}">
+                    <div class="message {{ message.role }}" style="animation: slowFadeInUp 0.6s ease-out forwards;">
                         <div class="message-content">
                             {{ message.content | replace('\\n', '<br>') | safe }}
                             {% if message.options %}
@@ -1425,7 +1658,7 @@ def chat():
             </div>
             
             {% if completed %}
-                <div class="input-container">
+                <div class="input-container" style="border-top: none; padding-top: 0;">
                     <button onclick="restartChat()" class="restart-btn">🔄 Start New Assessment</button>
                 </div>
             {% endif %}
@@ -1436,29 +1669,12 @@ def chat():
         const messagesContainer = document.getElementById('messages-container');
         const messageInput = document.getElementById('message-input');
         const sendBtn = document.getElementById('send-btn');
-        let sidebarOpen = {{ 'true' if sidebar_open else 'false' }};
+        let isWaitingForResponse = false;
         
         function scrollToBottom() { 
             messagesContainer.scrollTop = messagesContainer.scrollHeight; 
         }
         scrollToBottom();
-        
-        function toggleSidebar() {
-            fetch('/toggle_sidebar', { method: 'POST' })
-                .then(response => response.json())
-                .then(data => {
-                    const sidebar = document.getElementById('sidebar');
-                    const toggleBtn = document.querySelector('.toggle-sidebar-btn');
-                    if (data.sidebar_open) {
-                        sidebar.classList.remove('closed');
-                        toggleBtn.innerHTML = '◀';
-                    } else {
-                        sidebar.classList.add('closed');
-                        toggleBtn.innerHTML = '▶';
-                    }
-                    sidebarOpen = data.sidebar_open;
-                });
-        }
         
         function editAnswer(ref) {
             if (confirm('Edit this answer? This will reset all answers after this question.')) {
@@ -1478,38 +1694,137 @@ def chat():
             }
         }
         
-        function sendMessage(predefinedAnswer = null) {
+        async function sendMessage(predefinedAnswer = null) {
+            if (isWaitingForResponse) return;
+            
             let answer = predefinedAnswer || messageInput.value.trim();
             if (!answer && !predefinedAnswer) return;
             
             addMessageToUI('user', answer);
             if (!predefinedAnswer) messageInput.value = '';
+            
+            // Show AI thinking indicator for assistant responses (makes AI integration obvious)
+            showAIThinkingIndicator();
+            
+            isWaitingForResponse = true;
             setInputEnabled(false);
             
-            fetch('/send_message', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({answer: answer})
-            })
-            .then(response => response.json())
-            .then(data => {
+            try {
+                const response = await fetch('/send_message', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({answer: answer})
+                });
+                const data = await response.json();
+                
+                // Remove AI thinking indicator
+                removeAIThinkingIndicator();
+                
                 setInputEnabled(true);
-                if (data.messages) {
-                    data.messages.forEach(msg => addMessageToUI(msg.role, msg.content, msg.options));
-                    scrollToBottom();
+                
+                if (data.messages && data.messages.length > 0) {
+                    // Add each message with a noticeable delay to show AI processing
+                    for (let i = 0; i < data.messages.length; i++) {
+                        const msg = data.messages[i];
+                        
+                        // Show typing indicator before each assistant message
+                        if (msg.role === 'assistant') {
+                            showTypingIndicator();
+                            await new Promise(resolve => setTimeout(resolve, 800));
+                            removeTypingIndicator();
+                        }
+                        
+                        await new Promise(resolve => setTimeout(resolve, 300));
+                        addMessageToUI(msg.role, msg.content, msg.options);
+                        scrollToBottom();
+                    }
                 }
+                
                 if (data.status === 'completed' || data.status === 'phase_complete') {
+                    // Show a special AI summary processing message
+                    if (data.status === 'completed') {
+                        showAIProcessingMessage();
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                        removeAIProcessingMessage();
+                    }
+                    setTimeout(() => window.location.reload(), 1500);
+                } else {
+                    // Refresh page to update sidebar after a delay
                     setTimeout(() => window.location.reload(), 800);
-                } else if (data.messages) {
-                    // Refresh page to update sidebar
-                    setTimeout(() => window.location.reload(), 500);
                 }
-            })
-            .catch(error => { 
+            } catch (error) { 
                 console.error('Error:', error); 
+                removeAIThinkingIndicator();
+                removeTypingIndicator();
                 setInputEnabled(true); 
                 addMessageToUI('assistant', 'Sorry, there was an error. Please try again.'); 
-            });
+            } finally {
+                isWaitingForResponse = false;
+            }
+        }
+        
+        function showAIThinkingIndicator() {
+            const indicatorDiv = document.createElement('div');
+            indicatorDiv.id = 'ai-thinking-indicator';
+            indicatorDiv.className = 'message assistant';
+            indicatorDiv.innerHTML = `
+                <div class="message-content">
+                    <div class="ai-thinking">
+                        <div class="ai-spinner"></div>
+                        <div class="ai-thinking-text ai-pulse">🤖 AI is analyzing your response...</div>
+                    </div>
+                </div>
+            `;
+            messagesContainer.appendChild(indicatorDiv);
+            scrollToBottom();
+        }
+        
+        function removeAIThinkingIndicator() {
+            const indicator = document.getElementById('ai-thinking-indicator');
+            if (indicator) indicator.remove();
+        }
+        
+        function showTypingIndicator() {
+            const indicatorDiv = document.createElement('div');
+            indicatorDiv.id = 'typing-indicator';
+            indicatorDiv.className = 'message assistant';
+            indicatorDiv.innerHTML = `
+                <div class="message-content">
+                    <div class="typing-indicator">
+                        <span class="typing-dot"></span>
+                        <span class="typing-dot"></span>
+                        <span class="typing-dot"></span>
+                    </div>
+                </div>
+            `;
+            messagesContainer.appendChild(indicatorDiv);
+            scrollToBottom();
+        }
+        
+        function removeTypingIndicator() {
+            const indicator = document.getElementById('typing-indicator');
+            if (indicator) indicator.remove();
+        }
+        
+        function showAIProcessingMessage() {
+            const msgDiv = document.createElement('div');
+            msgDiv.id = 'ai-processing-msg';
+            msgDiv.className = 'message assistant';
+            msgDiv.innerHTML = `
+                <div class="message-content">
+                    <div class="ai-thinking" style="background: white; border-left-color: #d63384;">
+                        <div class="ai-spinner"></div>
+                        <div class="ai-thinking-text" style="color: #d63384;">✨ Generating your personalized AI tax summary... ✨</div>
+                    </div>
+                </div>
+            `;
+            messagesContainer.appendChild(msgDiv);
+            scrollToBottom();
+        }
+        
+        function removeAIProcessingMessage() {
+            const msg = document.getElementById('ai-processing-msg');
+            if (msg) msg.remove();
         }
         
         function addMessageToUI(role, content, options = null) {
@@ -1532,9 +1847,7 @@ def chat():
                     }
                     btn.textContent = displayText;
                     btn.onclick = () => {
-                        // Remove selected class from all buttons in this container
                         optionsDiv.querySelectorAll('.option-btn').forEach(b => b.classList.remove('selected'));
-                        // Add selected class to clicked button
                         btn.classList.add('selected');
                         sendMessage(option);
                     };
@@ -1660,22 +1973,26 @@ def send_message():
     proposal_questions = handle_proposal(current_ref, answer)
     if proposal_questions:
         session["answers"][current_ref] = answer
-        session["history"].append(current_ref)
+        # Only add to history if not already there (not editing)
+        if current_ref not in session["history"]:
+            session["history"].append(current_ref)
         session["waiting_for_answer"] = False
         process_next_question()
         return jsonify({"status": "success", "messages": session["messages"][-1:]})
     
     result = process_handler_next(current_ref, answer)
     
+    # Save answer - if editing, overwrite existing
     session["answers"][current_ref] = answer
-    session["history"].append(current_ref)
+    # Only add to history if not already there (not editing)
+    if current_ref not in session["history"]:
+        session["history"].append(current_ref)
     session["waiting_for_answer"] = False
     
     run_xhr_params(question, answer, current_ref)
     
     if result.get("status") == "completed":
         complete_assessment()
-        # Return the completion message so it shows immediately before reload
         return jsonify({"status": "completed", "messages": session["messages"][-1:]})
     
     elif result.get("status") == "phase_complete":

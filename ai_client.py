@@ -26,7 +26,7 @@ class AIClient:
         # Google Gemini credentials
         self.google_key = os.environ.get("GOOGLE_API_KEY")
         self.google_token = os.environ.get("GOOGLE_API_TOKEN")
-        self.google_model = os.environ.get("GOOGLE_MODEL", "gemini-2.5-flash")
+        self.google_model = os.environ.get("GOOGLE_MODEL", "gemini-1.5-flash")  # Changed default
 
         # Request settings
         self.request_timeout = int(os.environ.get("AI_REQUEST_TIMEOUT", "30"))
@@ -93,20 +93,29 @@ class AIClient:
         # Use the model from env or default to a working one
         model = self.google_model
         
-        # Use v1 endpoint (not v1beta)
-        url = f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent"
-        params = {"key": self.google_key} if self.google_key else {}
+        # Use v1beta endpoint which has better model support
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         
-        headers = {"Content-Type": "application/json"}
-        if self.google_token:
-            headers["Authorization"] = f"Bearer {self.google_token}"
+        # Proper API key authentication
+        if not self.google_key:
+            logger.error("No Google API key provided")
+            return ""
         
-        # Build the prompt with system instructions
-        full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.google_key  # This is the correct way for API key auth
+        }
         
-        # Correct request body format for Gemini API
+        # Build the prompt - combine system and user prompts
+        if system_prompt:
+            full_prompt = f"{system_prompt}\n\n{prompt}"
+        else:
+            full_prompt = prompt
+        
+        # Correct request body format for Gemini API v1beta
         body = {
             "contents": [{
+                "role": "user",
                 "parts": [{"text": full_prompt}]
             }],
             "generationConfig": {
@@ -114,21 +123,40 @@ class AIClient:
                 "maxOutputTokens": max_tokens,
                 "topP": 0.95,
                 "topK": 40
-            }
+            },
+            "safetySettings": [
+                {
+                    "category": "HARM_CATEGORY_HARASSMENT",
+                    "threshold": "BLOCK_NONE"
+                },
+                {
+                    "category": "HARM_CATEGORY_HATE_SPEECH",
+                    "threshold": "BLOCK_NONE"
+                },
+                {
+                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "threshold": "BLOCK_NONE"
+                },
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "threshold": "BLOCK_NONE"
+                }
+            ]
         }
         
         for attempt in range(self.max_retries):
             try:
+                logger.info(f"Calling Gemini API (attempt {attempt + 1}) with model: {model}")
                 response = requests.post(
                     url,
                     headers=headers,
-                    params=params,
                     json=body,
                     timeout=self.request_timeout
                 )
                 
                 if response.status_code == 200:
                     data = response.json()
+                    logger.info(f"Gemini API response received successfully")
                     candidates = data.get("candidates", [])
                     if candidates:
                         content = candidates[0].get("content", {})
@@ -136,20 +164,34 @@ class AIClient:
                         if parts:
                             text = parts[0].get("text", "").strip()
                             if text:
-                                logger.info(f"Successfully generated with model {model}")
+                                logger.info(f"Successfully generated with model {model}, response length: {len(text)}")
                                 return text
+                        else:
+                            logger.warning("No parts in Gemini response")
+                    else:
+                        logger.warning("No candidates in Gemini response")
+                        # Check if there's a finish reason
+                        if candidates:
+                            finish_reason = candidates[0].get("finishReason", "UNKNOWN")
+                            logger.warning(f"Finish reason: {finish_reason}")
+                    return ""
+                elif response.status_code == 401:
+                    logger.error(f"Authentication failed (401). Check your API key: {response.text[:200]}")
+                    return ""
+                elif response.status_code == 404:
+                    logger.error(f"Model not found (404). Model '{model}' may not exist. Try: gemini-1.5-flash or gemini-1.5-pro")
                     return ""
                 elif response.status_code == 429:
                     if attempt < self.max_retries - 1:
                         wait_time = 2 ** attempt
-                        logger.warning(f"Rate limited. Retrying in {wait_time}s")
+                        logger.warning(f"Rate limited (429). Retrying in {wait_time}s")
                         time.sleep(wait_time)
                         continue
                     else:
                         logger.error("Rate limit exceeded after retries")
                         return ""
                 else:
-                    logger.error(f"Gemini API error ({response.status_code}): {response.text}")
+                    logger.error(f"Gemini API error ({response.status_code}): {response.text[:500]}")
                     if attempt == self.max_retries - 1:
                         return ""
                     
