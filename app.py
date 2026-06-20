@@ -8,6 +8,7 @@ from functools import wraps
 import inspect
 import os
 import time
+import requests
 
 # Load .env BEFORE importing ai_client to ensure env vars are set
 dotenv_path = os.path.join(os.getcwd(), ".env")
@@ -50,6 +51,107 @@ VALID_PASSKEYS = ["12345", "pass123"]
 # SAVY Brand Color
 SAVY_PINK = "#d63384"
 SAVY_GRADIENT = f"linear-gradient(45deg, {SAVY_PINK}, #a02070)"
+
+# =========================================================
+# SAVY API INTEGRATION
+# =========================================================
+
+SAVY_API_BASE_URL = os.environ.get("SAVY_API_BASE_URL", "https://api.savyapp.dev")
+SAVY_TOKEN = os.environ.get("SAVY_TOKEN")
+
+def get_savy_headers():
+    """Get headers for Savy API requests"""
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
+    if SAVY_TOKEN:
+        headers["Authorization"] = f"Bearer {SAVY_TOKEN}"
+    else:
+        logger.warning("No Savy token found in environment")
+    return headers
+
+def make_savy_request(endpoint, method="GET", data=None, params=None):
+    """Make a request to the Savy API"""
+    url = f"{SAVY_API_BASE_URL}/{endpoint.lstrip('/')}"
+    headers = get_savy_headers()
+    
+    logger.info(f"📡 Making {method} request to: {url}")
+    if data:
+        logger.info(f"📦 Request data: {json.dumps(data, indent=2)[:200]}...")
+    
+    try:
+        if method.upper() == "GET":
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+        elif method.upper() == "POST":
+            response = requests.post(url, headers=headers, json=data, timeout=30)
+        elif method.upper() == "PUT":
+            response = requests.put(url, headers=headers, json=data, timeout=30)
+        elif method.upper() == "DELETE":
+            response = requests.delete(url, headers=headers, timeout=30)
+        else:
+            raise ValueError(f"Unsupported method: {method}")
+        
+        logger.info(f"📥 Response status: {response.status_code}")
+        
+        if response.status_code == 401:
+            logger.error("Authentication failed. Token may be expired.")
+            return {"error": "Authentication failed", "status": 401}
+        
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Savy API error: {e}")
+        if hasattr(e, 'response') and e.response:
+            logger.error(f"Response: {e.response.text[:500]}")
+            try:
+                return e.response.json()
+            except:
+                return {"error": str(e), "status": e.response.status_code if hasattr(e.response, 'status_code') else None}
+        return {"error": str(e)}
+
+# =========================================================
+# SAVY API - STEP 2: INITIATE REFUND ESTIMATION
+# =========================================================
+
+def initiate_refund_estimation():
+    """
+    Step 2: Initiate a refund estimation with empty body
+    POST /api/v1/refund-estimations
+    """
+    try:
+        logger.info("🔄 Initiating refund estimation with Savy API...")
+        
+        # Make POST request with empty body
+        response = make_savy_request("api/v1/refund-estimations", "POST", {})
+        
+        if response and not response.get("error"):
+            estimation_id = response.get("id") or response.get("estimationId") or response.get("_id")
+            logger.info(f"✅ Refund estimation initiated successfully! ID: {estimation_id}")
+            
+            # Store the estimation ID in session
+            if estimation_id:
+                session["refund_estimation_id"] = estimation_id
+                session.modified = True
+            
+            return {
+                "success": True,
+                "data": response,
+                "estimation_id": estimation_id
+            }
+        else:
+            logger.error(f"❌ Failed to initiate refund estimation: {response}")
+            return {
+                "success": False,
+                "error": response
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error initiating refund estimation: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 # =========================================================
 # LOAD QUESTIONS
@@ -443,7 +545,9 @@ def init_session():
             "last_activity": datetime.now().isoformat(),
             "error_count": 0,
             "estimation_data": {},
-            "sidebar_open": True
+            "sidebar_open": True,
+            "savy_estimation_id": None,
+            "refund_estimation_id": None
         }
         
         for key, default_value in defaults.items():
@@ -825,6 +929,52 @@ def run_xhr_params(question, answer, current_ref):
     except Exception as e:
         logger.error(f"Error in xhrParams for {current_ref}: {e}")
 
+def send_to_savy(answers, phase, phase_name, ai_summary=None):
+    """Send assessment data to Savy API - using the correct v1 endpoint"""
+    try:
+        # Prepare data for Savy API
+        savy_data = {
+            "phase": phase,
+            "phase_name": phase_name,
+            "answers": answers,
+            "completed_at": datetime.now().isoformat(),
+            "user_answers": {}
+        }
+        
+        # Format answers for Savy
+        for ref, answer in answers.items():
+            question = get_question(ref)
+            if question:
+                title = question.get("title", ref)
+                if callable(title):
+                    title = title(answers)
+                savy_data["user_answers"][ref] = {
+                    "question": title,
+                    "answer": answer,
+                    "type": question.get("type", "text")
+                }
+        
+        if ai_summary:
+            savy_data["ai_summary"] = ai_summary
+        
+        # Send to Savy API - CORRECT ENDPOINT
+        logger.info("📤 Sending assessment data to Savy API...")
+        # Use the correct v1 endpoint
+        response = make_savy_request("api/v1/refund-estimations", "POST", savy_data)
+        
+        if response and not response.get("error"):
+            logger.info("✅ Assessment data saved to Savy successfully")
+            session["savy_estimation_id"] = response.get("id") or response.get("estimationId")
+            session.modified = True
+            return True
+        else:
+            logger.warning(f"⚠️ Could not save to Savy: {response}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Error sending to Savy: {e}")
+        return False
+
 def complete_assessment():
     """Complete assessment and show results with clear AI integration"""
     try:
@@ -874,7 +1024,7 @@ def complete_assessment():
         thinking_message = "🤖 **AI Assistant is analyzing your responses...**\n\n*This may take a moment while I generate your personalized tax assessment.*"
         add_message("assistant", thinking_message)
         
-        ai_summary = ""
+        ai_summary = None
         if use_ai and provider_enabled:
             try:
                 logger.info(f"\n{'='*70}")
@@ -917,11 +1067,14 @@ def complete_assessment():
         else:
             logger.warning(f"⚠️  Skipping AI summary: use_ai={use_ai}, provider_enabled={provider_enabled}")
         
-        # Build final message - remove the thinking message and replace with real content
         # Remove the thinking message from messages list
         if session["messages"] and "AI Assistant is analyzing your responses" in session["messages"][-1].get("content", ""):
             session["messages"].pop()
         
+        # Send data to Savy API
+        send_to_savy(answers, phase, phase_name, ai_summary)
+        
+        # Build final message
         final_message = f"🎉 **{phase_name} Complete!** 🎉\n\n"
         final_message += "=" * 50 + "\n\n"
         final_message += "📊 **Summary of Your Responses:**\n\n"
@@ -1124,8 +1277,8 @@ def edit_answer():
         # Find the index of the question to edit
         ref_index = history.index(ref)
         
-        # Remove all answers from this point forward
-        answers_to_remove = history[ref_index:]
+        # Remove all answers from this point forward (including the one being edited)
+        answers_to_remove = history[ref_index:]  # Include the edited question itself
         for removed_ref in answers_to_remove:
             if removed_ref in session["answers"]:
                 del session["answers"][removed_ref]
@@ -1134,7 +1287,11 @@ def edit_answer():
             for key in proposal_keys:
                 del session["answers"][key]
         
-        # Trim history
+        # Also remove any estimation data that might affect future calculations
+        if "estimation_data" in session:
+            session["estimation_data"] = {}
+        
+        # Trim history - keep only answers before this question
         session["history"] = history[:ref_index]
         
         # Reset phase if needed - if editing a Phase 1 question, go back to Phase 1
@@ -1148,11 +1305,12 @@ def edit_answer():
         session["current_ref"] = ref
         session["waiting_for_answer"] = False
         session["pending_proposal"] = None
+        session["completed"] = False  # Ensure not in completed state
         
-        # Find and remove messages after this question
+        # Find and remove messages from this point forward
         msg_index_to_keep = -1
         
-        # First try to find the message containing this exact question
+        # Try to find the message containing this exact question
         question_obj = get_question(ref)
         if question_obj:
             title = question_obj.get("title", "")
@@ -1173,11 +1331,13 @@ def edit_answer():
         
         # If still not found, keep messages up to the answer
         if msg_index_to_keep == -1:
-            answer_value = session["answers"].get(ref) if ref in session["answers"] else None
-            for i, msg in enumerate(session["messages"]):
-                if msg.get("role") == "user" and answer_value and answer_value in msg.get("content", ""):
-                    msg_index_to_keep = i - 1
-                    break
+            # Find the last user message before this question
+            for i in range(len(session["messages"]) - 1, -1, -1):
+                msg = session["messages"][i]
+                if msg.get("role") == "user":
+                    if i > 0 and i < len(session["messages"]):
+                        msg_index_to_keep = i - 1
+                        break
         
         if msg_index_to_keep >= 0:
             session["messages"] = session["messages"][:msg_index_to_keep]
@@ -1192,11 +1352,12 @@ def edit_answer():
             input_type = get_question_type(question)
             
             # Add an edit indicator and re-ask the question
-            add_message("assistant", f"✏️ **Editing your answer to:**\n\n{question_text}", options, input_type)
+            edit_message = f"✏️ **Editing your answer to:**\n\n{question_text}"
+            add_message("assistant", edit_message, options, input_type)
             session["waiting_for_answer"] = True
             session.modified = True
             
-            return jsonify({"status": "success", "current_ref": ref})
+            return jsonify({"status": "success", "current_ref": ref, "message": "You can now edit your answer and continue"})
         
         return jsonify({"status": "error", "message": "Question not found"})
         
@@ -2006,12 +2167,104 @@ def send_message():
     elif result.get("next_ref"):
         session["current_ref"] = result["next_ref"]
         process_next_question()
+        return jsonify({"status": "success", "messages": session["messages"][-1:]})
     
     else:
         complete_assessment()
         return jsonify({"status": "completed", "messages": session["messages"][-1:]})
     
     return jsonify({"status": "success", "messages": session["messages"][-1:]})
+
+# =========================================================
+# SAVY API ROUTES
+# =========================================================
+
+@app.route("/api/savy/estimate", methods=["POST"])
+@safe_route
+def savy_estimate():
+    """Send estimation data to Savy API"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+        
+        logger.info(f"📊 Sending estimation data to Savy")
+        
+        result = make_savy_request("api/estimations", "POST", data)
+        
+        if result and not result.get("error"):
+            return jsonify({"success": True, "data": result})
+        else:
+            return jsonify({"success": False, "error": result}), 400
+            
+    except Exception as e:
+        logger.error(f"Error in savy_estimate: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/savy/user", methods=["GET"])
+@safe_route
+def savy_get_user():
+    """Get user info from Savy API"""
+    try:
+        result = make_savy_request("api/users/me", "GET")
+        
+        if result and not result.get("error"):
+            return jsonify({"success": True, "data": result})
+        else:
+            return jsonify({"success": False, "error": result}), 401
+            
+    except Exception as e:
+        logger.error(f"Error in savy_get_user: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/savy/validate", methods=["GET"])
+@safe_route
+def savy_validate_token():
+    """Validate the Savy token"""
+    try:
+        result = make_savy_request("api/users/me", "GET")
+        
+        if result and not result.get("error"):
+            return jsonify({"valid": True, "user": result})
+        else:
+            return jsonify({"valid": False, "error": result})
+            
+    except Exception as e:
+        logger.error(f"Error validating token: {e}")
+        return jsonify({"valid": False, "error": str(e)})
+
+# =========================================================
+# STEP 2: INITIATE REFUND ESTIMATION ROUTE
+# =========================================================
+
+@app.route("/api/savy/initiate-refund", methods=["POST"])
+@safe_route
+def initiate_refund():
+    """
+    Initiate a refund estimation with empty body
+    POST /api/v1/refund-estimations
+    """
+    try:
+        logger.info("🔄 Initiating refund estimation via API route...")
+        
+        result = initiate_refund_estimation()
+        
+        if result.get("success"):
+            return jsonify({
+                "success": True,
+                "message": "Refund estimation initiated successfully",
+                "estimation_id": result.get("estimation_id"),
+                "data": result.get("data")
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": result.get("error", "Failed to initiate refund estimation")
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error in initiate_refund: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/restart_chat", methods=["POST"])
 @safe_route
