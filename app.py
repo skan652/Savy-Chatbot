@@ -85,6 +85,8 @@ def make_savy_request(endpoint, method="GET", data=None, params=None):
             response = requests.get(url, headers=headers, params=params, timeout=30)
         elif method.upper() == "POST":
             response = requests.post(url, headers=headers, json=data, timeout=30)
+        elif method.upper() == "PATCH":
+            response = requests.patch(url, headers=headers, json=data, timeout=30)
         elif method.upper() == "PUT":
             response = requests.put(url, headers=headers, json=data, timeout=30)
         elif method.upper() == "DELETE":
@@ -148,6 +150,46 @@ def initiate_refund_estimation():
             
     except Exception as e:
         logger.error(f"❌ Error initiating refund estimation: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+# =========================================================
+# SAVY API - STEP 3: UPDATE REFUND ESTIMATION REAL-TIME
+# =========================================================
+
+def update_refund_estimation(estimation_id, answer_data):
+    """
+    Step 3: Update the refund estimation in real-time with client answers
+    PATCH /api/v1/refund-estimations/{id}
+    """
+    try:
+        if not estimation_id:
+            logger.warning("No estimation ID available to update")
+            return {"success": False, "error": "No estimation ID"}
+        
+        logger.info(f"🔄 Updating refund estimation {estimation_id} with answer data...")
+        
+        # Make PATCH request with the answer data
+        response = make_savy_request(f"api/v1/refund-estimations/{estimation_id}", "PATCH", answer_data)
+        
+        if response and not response.get("error"):
+            logger.info(f"✅ Refund estimation {estimation_id} updated successfully")
+            return {
+                "success": True,
+                "data": response,
+                "estimation_id": estimation_id
+            }
+        else:
+            logger.error(f"❌ Failed to update refund estimation: {response}")
+            return {
+                "success": False,
+                "error": response
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error updating refund estimation: {e}")
         return {
             "success": False,
             "error": str(e)
@@ -547,7 +589,8 @@ def init_session():
             "estimation_data": {},
             "sidebar_open": True,
             "savy_estimation_id": None,
-            "refund_estimation_id": None
+            "refund_estimation_id": None,
+            "estimation_initiated": False
         }
         
         for key, default_value in defaults.items():
@@ -959,7 +1002,6 @@ def send_to_savy(answers, phase, phase_name, ai_summary=None):
         
         # Send to Savy API - CORRECT ENDPOINT
         logger.info("📤 Sending assessment data to Savy API...")
-        # Use the correct v1 endpoint
         response = make_savy_request("api/v1/refund-estimations", "POST", savy_data)
         
         if response and not response.get("error"):
@@ -1370,6 +1412,19 @@ def edit_answer():
 def chat():
     if not session.get("passkey_verified"):
         return redirect(url_for("passkey_page"))
+    
+    # Initialize refund estimation when chat starts (Step 2)
+    if not session.get("estimation_initiated") and not session.get("completed"):
+        try:
+            logger.info("🔄 Initiating refund estimation on chat start...")
+            result = initiate_refund_estimation()
+            if result.get("success"):
+                session["estimation_initiated"] = True
+                logger.info(f"✅ Refund estimation initiated with ID: {session.get('refund_estimation_id')}")
+            else:
+                logger.warning(f"⚠️ Failed to initiate refund estimation: {result.get('error')}")
+        except Exception as e:
+            logger.error(f"Error initiating refund estimation: {e}")
     
     if not session["messages"] and not session["completed"]:
         welcome_msg = "🌅 **Good morning!**\n\n"
@@ -2152,6 +2207,41 @@ def send_message():
     
     run_xhr_params(question, answer, current_ref)
     
+    # =========================================================
+    # STEP 3: UPDATE REFUND ESTIMATION IN REAL-TIME
+    # =========================================================
+    estimation_id = session.get("refund_estimation_id")
+    if estimation_id and session.get("estimation_initiated"):
+        try:
+            # Prepare answer data for the API
+            question_obj = get_question(current_ref)
+            answer_data = {
+                "answers": session.get("answers", {}),
+                "last_answered": current_ref,
+                "current_phase": session.get("phase", 1),
+                "progress": {
+                    "answered": len(session.get("history", [])),
+                    "total": 15  # Total number of questions
+                },
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Include the specific answer
+            if question_obj:
+                title = question_obj.get("title", current_ref)
+                if callable(title):
+                    title = title(session.get("answers", {}))
+                answer_data["last_answer"] = {
+                    "question": title,
+                    "answer": session["answers"][current_ref],
+                    "ref": current_ref
+                }
+            
+            # Update the estimation in real-time
+            update_refund_estimation(estimation_id, answer_data)
+        except Exception as e:
+            logger.error(f"Error updating estimation in real-time: {e}")
+    
     if result.get("status") == "completed":
         complete_assessment()
         return jsonify({"status": "completed", "messages": session["messages"][-1:]})
@@ -2264,6 +2354,58 @@ def initiate_refund():
             
     except Exception as e:
         logger.error(f"Error in initiate_refund: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# =========================================================
+# STEP 3: UPDATE ESTIMATION ROUTE
+# =========================================================
+
+@app.route("/api/savy/update-estimation", methods=["POST"])
+@safe_route
+def update_estimation():
+    """Update the refund estimation with current answers"""
+    try:
+        data = request.get_json() or {}
+        estimation_id = data.get("estimation_id") or session.get("refund_estimation_id")
+        
+        if not estimation_id:
+            return jsonify({"error": "No estimation ID provided"}), 400
+        
+        # Prepare answer data
+        answer_data = {
+            "answers": session.get("answers", {}),
+            "last_answered": session.get("current_ref"),
+            "current_phase": session.get("phase", 1),
+            "progress": {
+                "answered": len(session.get("history", [])),
+                "total": 15
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Include the last answer if available
+        current_ref = session.get("current_ref")
+        if current_ref and current_ref in session.get("answers", {}):
+            question = get_question(current_ref)
+            if question:
+                title = question.get("title", current_ref)
+                if callable(title):
+                    title = title(session.get("answers", {}))
+                answer_data["last_answer"] = {
+                    "question": title,
+                    "answer": session["answers"][current_ref],
+                    "ref": current_ref
+                }
+        
+        result = update_refund_estimation(estimation_id, answer_data)
+        
+        if result.get("success"):
+            return jsonify({"success": True, "data": result.get("data")})
+        else:
+            return jsonify({"success": False, "error": result.get("error")}), 500
+            
+    except Exception as e:
+        logger.error(f"Error in update_estimation: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route("/restart_chat", methods=["POST"])

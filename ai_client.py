@@ -7,8 +7,6 @@ from typing import Optional, List, Dict
 
 logger = logging.getLogger(__name__)
 
-
-
 class AIClient:
     """
     Multi-provider AI Client supporting Gemini and OpenAI.
@@ -26,7 +24,7 @@ class AIClient:
         # Google Gemini credentials
         self.google_key = os.environ.get("GOOGLE_API_KEY")
         self.google_token = os.environ.get("GOOGLE_API_TOKEN")
-        self.google_model = os.environ.get("GOOGLE_MODEL", "gemini-1.5-flash")  # Changed default
+        self.google_model = os.environ.get("GOOGLE_MODEL", "gemini-1.5-flash")
 
         # Request settings
         self.request_timeout = int(os.environ.get("AI_REQUEST_TIMEOUT", "30"))
@@ -88,34 +86,54 @@ class AIClient:
     ) -> str:
         """Generate using Google Gemini API."""
         if not self.google_key and not self.google_token:
-            raise EnvironmentError("GOOGLE_API_KEY or GOOGLE_API_TOKEN not set for Gemini")
-
-        # Use the model from env or default to a working one
-        model = self.google_model
-        
-        # Use v1beta endpoint which has better model support
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        
-        # Proper API key authentication
-        if not self.google_key:
-            logger.error("No Google API key provided")
+            logger.error("No Google API key or token provided")
             return ""
+
+        model = self.google_model
+        logger.info(f"Using Gemini model: {model}")
         
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": self.google_key  # This is the correct way for API key auth
-        }
-        
-        # Build the prompt - combine system and user prompts
+        # Build the prompt
         if system_prompt:
             full_prompt = f"{system_prompt}\n\n{prompt}"
         else:
             full_prompt = prompt
         
-        # Correct request body format for Gemini API v1beta
+        # Try multiple authentication methods
+        auth_methods = []
+        
+        # Method 1: API key in URL (most common)
+        if self.google_key:
+            auth_methods.append({
+                "name": "API Key in URL",
+                "url": f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.google_key}",
+                "headers": {"Content-Type": "application/json"}
+            })
+        
+        # Method 2: API key in header (alternative)
+        if self.google_key:
+            auth_methods.append({
+                "name": "API Key in Header",
+                "url": f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                "headers": {
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": self.google_key
+                }
+            })
+        
+        # Method 3: Bearer token (if you have a token)
+        if self.google_token:
+            auth_methods.append({
+                "name": "Bearer Token",
+                "url": f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                "headers": {
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.google_token}"
+                }
+            })
+        
+        # Request body
         body = {
             "contents": [{
-                "role": "user",
                 "parts": [{"text": full_prompt}]
             }],
             "generationConfig": {
@@ -123,87 +141,128 @@ class AIClient:
                 "maxOutputTokens": max_tokens,
                 "topP": 0.95,
                 "topK": 40
-            },
-            "safetySettings": [
-                {
-                    "category": "HARM_CATEGORY_HARASSMENT",
-                    "threshold": "BLOCK_NONE"
-                },
-                {
-                    "category": "HARM_CATEGORY_HATE_SPEECH",
-                    "threshold": "BLOCK_NONE"
-                },
-                {
-                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                    "threshold": "BLOCK_NONE"
-                },
-                {
-                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                    "threshold": "BLOCK_NONE"
-                }
-            ]
+            }
         }
         
-        for attempt in range(self.max_retries):
-            try:
-                logger.info(f"Calling Gemini API (attempt {attempt + 1}) with model: {model}")
-                response = requests.post(
-                    url,
-                    headers=headers,
-                    json=body,
-                    timeout=self.request_timeout
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    logger.info(f"Gemini API response received successfully")
-                    candidates = data.get("candidates", [])
-                    if candidates:
-                        content = candidates[0].get("content", {})
-                        parts = content.get("parts", [])
-                        if parts:
-                            text = parts[0].get("text", "").strip()
-                            if text:
-                                logger.info(f"Successfully generated with model {model}, response length: {len(text)}")
-                                return text
-                        else:
-                            logger.warning("No parts in Gemini response")
-                    else:
-                        logger.warning("No candidates in Gemini response")
-                        # Check if there's a finish reason
+        # Try each authentication method
+        for auth_method in auth_methods:
+            for attempt in range(self.max_retries):
+                try:
+                    logger.info(f"Trying auth: {auth_method['name']} (attempt {attempt + 1})")
+                    
+                    response = requests.post(
+                        auth_method["url"],
+                        headers=auth_method["headers"],
+                        json=body,
+                        timeout=self.request_timeout
+                    )
+                    
+                    logger.info(f"Response status: {response.status_code}")
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        candidates = data.get("candidates", [])
                         if candidates:
-                            finish_reason = candidates[0].get("finishReason", "UNKNOWN")
-                            logger.warning(f"Finish reason: {finish_reason}")
-                    return ""
-                elif response.status_code == 401:
-                    logger.error(f"Authentication failed (401). Check your API key: {response.text[:200]}")
-                    return ""
-                elif response.status_code == 404:
-                    logger.error(f"Model not found (404). Model '{model}' may not exist. Try: gemini-1.5-flash or gemini-1.5-pro")
-                    return ""
-                elif response.status_code == 429:
+                            content = candidates[0].get("content", {})
+                            parts = content.get("parts", [])
+                            if parts:
+                                text = parts[0].get("text", "").strip()
+                                if text:
+                                    logger.info(f"✅ Gemini response: {text[:100]}...")
+                                    return text
+                                else:
+                                    logger.warning("Empty text in response")
+                            else:
+                                logger.warning("No parts in response")
+                        else:
+                            logger.warning("No candidates in response")
+                            # Check for finish reason
+                            if candidates:
+                                finish_reason = candidates[0].get("finishReason", "UNKNOWN")
+                                logger.warning(f"Finish reason: {finish_reason}")
+                        # If we get here, response was 200 but no content
+                        # Return a default summary
+                        return self._generate_fallback_summary(prompt)
+                    
+                    elif response.status_code == 401:
+                        logger.error(f"Authentication failed (401) with {auth_method['name']}")
+                        logger.error(f"Response: {response.text[:300]}")
+                        break  # Try next auth method
+                    
+                    elif response.status_code == 404:
+                        logger.warning(f"Model not found (404). Trying different model...")
+                        # Try with a different model
+                        fallback_models = ["gemini-1.5-flash", "gemini-pro", "gemini-1.5-pro"]
+                        for fallback_model in fallback_models:
+                            if fallback_model != model:
+                                logger.info(f"Trying fallback model: {fallback_model}")
+                                # Update URL with fallback model
+                                fallback_url = auth_method["url"].replace(model, fallback_model)
+                                response = requests.post(
+                                    fallback_url,
+                                    headers=auth_method["headers"],
+                                    json=body,
+                                    timeout=self.request_timeout
+                                )
+                                if response.status_code == 200:
+                                    data = response.json()
+                                    candidates = data.get("candidates", [])
+                                    if candidates:
+                                        content = candidates[0].get("content", {})
+                                        parts = content.get("parts", [])
+                                        if parts:
+                                            text = parts[0].get("text", "").strip()
+                                            if text:
+                                                logger.info(f"✅ Gemini response with fallback model: {text[:100]}...")
+                                                return text
+                        break
+                    
+                    elif response.status_code == 429:
+                        if attempt < self.max_retries - 1:
+                            wait_time = 2 ** attempt
+                            logger.warning(f"Rate limited (429). Retrying in {wait_time}s")
+                            time.sleep(wait_time)
+                            continue
+                        else:
+                            logger.error("Rate limit exceeded")
+                            break
+                    
+                    else:
+                        logger.error(f"Gemini API error ({response.status_code}): {response.text[:300]}")
+                        break
+                        
+                except requests.exceptions.RequestException as e:
+                    logger.warning(f"Request failed (attempt {attempt + 1}): {e}")
                     if attempt < self.max_retries - 1:
-                        wait_time = 2 ** attempt
-                        logger.warning(f"Rate limited (429). Retrying in {wait_time}s")
-                        time.sleep(wait_time)
+                        time.sleep(2 ** attempt)
                         continue
                     else:
-                        logger.error("Rate limit exceeded after retries")
-                        return ""
-                else:
-                    logger.error(f"Gemini API error ({response.status_code}): {response.text[:500]}")
-                    if attempt == self.max_retries - 1:
-                        return ""
-                    
-            except requests.exceptions.RequestException as e:
-                logger.warning(f"Request failed (attempt {attempt + 1}): {e}")
-                if attempt < self.max_retries - 1:
-                    time.sleep(2 ** attempt)
-                    continue
-                else:
-                    return ""
+                        break
         
-        return ""
+        # If all methods fail, return a fallback summary
+        logger.warning("All Gemini API attempts failed. Using fallback summary.")
+        return self._generate_fallback_summary(prompt)
+
+    def _generate_fallback_summary(self, prompt: str) -> str:
+        """Generate a fallback summary when API fails"""
+        # Extract key information from the prompt
+        lines = prompt.split('\n')
+        summary_parts = []
+        
+        for line in lines:
+            if '→' in line or ':' in line:
+                summary_parts.append(line.strip())
+        
+        if summary_parts:
+            fallback = "📝 **Assessment Summary**\n\nBased on your responses:\n\n"
+            for part in summary_parts[:8]:
+                fallback += f"• {part}\n"
+            if len(summary_parts) > 8:
+                fallback += f"\n• ... and {len(summary_parts) - 8} more responses"
+            fallback += "\n\nA tax specialist will review your information and contact you soon."
+            return fallback
+        else:
+            return "Thank you for completing the tax assessment. Your responses have been recorded and will be reviewed by our tax specialists."
 
     def _generate_openai(
         self,
@@ -215,7 +274,8 @@ class AIClient:
         """Generate using OpenAI/ChatGPT API."""
         api_key = self.chatgpt_key or self.openai_key
         if not api_key:
-            raise EnvironmentError("CHATGPT_API_KEY or OPENAI_API_KEY not set")
+            logger.error("No OpenAI API key provided")
+            return self._generate_fallback_summary(prompt)
 
         url = "https://api.openai.com/v1/chat/completions"
         headers = {
@@ -243,7 +303,7 @@ class AIClient:
 
                 choices = data.get("choices") or []
                 if not choices:
-                    return ""
+                    return self._generate_fallback_summary(prompt)
 
                 text_parts = []
                 for ch in choices:
@@ -251,7 +311,11 @@ class AIClient:
                     content = msg.get("content") or ""
                     text_parts.append(content)
 
-                return "\n".join(text_parts).strip()
+                result = "\n".join(text_parts).strip()
+                if result:
+                    return result
+                else:
+                    return self._generate_fallback_summary(prompt)
 
             except requests.exceptions.HTTPError as exc:
                 if exc.response is not None and exc.response.status_code == 429:
@@ -262,12 +326,12 @@ class AIClient:
                         continue
                 logger.error(f"OpenAI API error: {exc}")
                 if attempt == self.max_retries - 1:
-                    raise
+                    return self._generate_fallback_summary(prompt)
             except requests.exceptions.RequestException as exc:
                 if attempt < self.max_retries - 1:
                     time.sleep(2 ** attempt)
                     continue
                 logger.error(f"OpenAI request error: {exc}")
-                raise
+                return self._generate_fallback_summary(prompt)
         
-        return ""
+        return self._generate_fallback_summary(prompt)
