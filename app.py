@@ -1113,6 +1113,30 @@ def complete_assessment():
         if session["messages"] and "AI Assistant is analyzing your responses" in session["messages"][-1].get("content", ""):
             session["messages"].pop()
         
+        # If AI summary is None or empty, generate a fallback summary from answers
+        if not ai_summary:
+            logger.info("📝 Generating fallback summary from answers...")
+            fallback_parts = []
+            for ref, answer in answers.items():
+                question = get_question(ref)
+                if question:
+                    title = question.get("title", ref)
+                    if callable(title):
+                        title = title(answers)
+                    # Clean up the answer for display
+                    clean_answer = str(answer).replace('\n', ' ')
+                    fallback_parts.append(f"• {title}: {clean_answer}")
+            
+            if fallback_parts:
+                ai_summary = "📝 **Assessment Summary**\n\nBased on your responses:\n\n"
+                for part in fallback_parts[:10]:
+                    ai_summary += f"{part}\n"
+                if len(fallback_parts) > 10:
+                    ai_summary += f"\n• ... and {len(fallback_parts) - 10} more responses"
+                ai_summary += "\n\nA tax specialist will review your information and contact you soon."
+            else:
+                ai_summary = "Thank you for completing the tax assessment. Your responses have been recorded and will be reviewed by our tax specialists."
+        
         # Send data to Savy API
         send_to_savy(answers, phase, phase_name, ai_summary)
         
@@ -1130,15 +1154,15 @@ def complete_assessment():
                 final_message += f"• **{title}**\n"
                 final_message += f"  → {answer}\n\n"
         
+        # Always show AI summary (whether from AI API or fallback)
         if ai_summary:
             final_message += "=" * 50 + "\n\n"
             final_message += "🤖 **AI-Powered Assessment:**\n\n"
             final_message += f"✨ *Based on your responses, our AI has generated the following personalized analysis:* ✨\n\n"
-            final_message += f"> {ai_summary}\n\n"
+            final_message += f"{ai_summary}\n\n"
             final_message += "---\n\n"
-            final_message += "💡 *This AI-generated summary helps our tax specialists better understand your situation.*\n\n"
+            final_message += "💡 *This assessment helps our tax specialists better understand your situation.*\n\n"
         else:
-            logger.warning("❌ No AI summary to add to final message")
             final_message += "=" * 50 + "\n\n"
             final_message += "📝 **Assessment Note:**\n\n"
             final_message += "Your responses have been recorded and will be reviewed by our tax team.\n\n"
@@ -1456,7 +1480,7 @@ def chat():
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <title>Tax Assistant Bot</title>
+    <title>SAVY - Tax Assistant</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1467,30 +1491,28 @@ def chat():
             overflow: hidden;
         }
         
-        /* Main layout with sidebar */
         .app-container {
             display: flex;
             height: 100vh;
             width: 100%;
         }
         
-        /* Sidebar styles - NO TOP BAR, logo moved here and centered */
         .sidebar {
-            width: 280px;
+            width: 320px;
             background: white;
             border-right: 1px solid #e0e0e0;
             display: flex;
             flex-direction: column;
-            box-shadow: 2px 0 8px rgba(0,0,0,0.05);
+            box-shadow: 2px 0 12px rgba(0,0,0,0.04);
             z-index: 10;
             overflow-y: auto;
+            transition: width 0.3s ease;
         }
         
-        /* Logo section in sidebar - CENTERED */
         .sidebar-logo {
-            padding: 32px 20px;
+            padding: 28px 24px 20px 24px;
             text-align: center;
-            border-bottom: 1px solid #e0e0e0;
+            border-bottom: 1px solid #f0f0f0;
             background: white;
             display: flex;
             justify-content: center;
@@ -1498,73 +1520,92 @@ def chat():
         }
         
         .savy-logo-sidebar {
-            width: 160px;
+            width: 150px;
             height: auto;
             display: block;
         }
         
-        /* Sidebar header with answers title - CENTERED */
         .sidebar-header {
-            padding: 16px 20px;
-            background: #d63384;
+            padding: 16px 24px;
+            background: linear-gradient(135deg, #d63384, #b02a6e);
             color: white;
             text-align: center;
         }
         
         .sidebar-header h3 {
-            font-size: 0.95em;
-            font-weight: 600;
-            margin-bottom: 4px;
+            font-size: 1em;
+            font-weight: 700;
+            margin-bottom: 3px;
+            letter-spacing: 0.3px;
         }
         
         .sidebar-header p {
-            font-size: 0.7em;
-            opacity: 0.85;
+            font-size: 0.75em;
+            opacity: 0.9;
+            font-weight: 400;
         }
         
         .answers-list {
             flex: 1;
             overflow-y: auto;
-            padding: 12px;
+            padding: 12px 16px;
         }
         
-        /* Optimized answer items - more compact */
         .answer-item {
-            background: #f7f7f8;
-            border-radius: 8px;
-            padding: 10px 12px;
+            background: #f8f8fa;
+            border-radius: 10px;
+            padding: 12px 14px;
             margin-bottom: 10px;
             cursor: pointer;
-            transition: all 0.2s;
-            border: 1px solid #e0e0e0;
+            transition: all 0.25s ease;
+            border: 1.5px solid #e8e8ec;
         }
         
         .answer-item:hover {
-            background: #f0f0f0;
-            transform: translateX(-2px);
+            background: #f0f0f4;
+            transform: translateX(-3px);
             border-color: #d63384;
+            box-shadow: 0 4px 12px rgba(214, 51, 132, 0.1);
         }
         
         .answer-question {
             font-size: 0.75em;
-            font-weight: 600;
+            font-weight: 700;
             color: #555;
             margin-bottom: 4px;
-            letter-spacing: -0.2px;
         }
         
         .answer-value {
-            font-size: 0.85em;
+            font-size: 1em;
             color: #d63384;
-            font-weight: 500;
+            font-weight: 600;
             word-break: break-word;
+            line-height: 1.3;
+        }
+        
+        .answer-number {
+            display: inline-block;
+            background: #d63384;
+            color: white;
+            font-size: 0.6em;
+            font-weight: 700;
+            padding: 1px 8px;
+            border-radius: 10px;
+            margin-right: 6px;
         }
         
         .edit-icon {
             float: right;
-            color: #bbb;
-            font-size: 0.7em;
+            color: #ccc;
+            font-size: 0.75em;
             cursor: pointer;
+            transition: color 0.2s ease;
+            opacity: 0;
+            padding: 1px 3px;
+        }
+        
+        .answer-item:hover .edit-icon {
+            opacity: 1;
         }
         
         .edit-icon:hover {
@@ -1573,171 +1614,293 @@ def chat():
         
         .no-answers {
             text-align: center;
-            color: #999;
-            padding: 20px;
-            font-size: 0.8em;
+            color: #bbb;
+            padding: 30px 16px;
+            font-size: 0.85em;
+            line-height: 1.6;
         }
         
-        /* Chat container - full height, no top bar */
+        .no-answers-icon {
+            font-size: 2.2em;
+            margin-bottom: 10px;
+            opacity: 0.5;
+            display: block;
+        }
+        
         .chat-container {
             flex: 1;
             display: flex;
             flex-direction: column;
-            background: white;
+            background: #fafafa;
             position: relative;
         }
-        
-        /* No chat header - removed completely */
         
         .messages-container { 
             flex: 1; 
             overflow-y: auto; 
-            padding: 20px 24px; 
-            background: white;
+            padding: 16px 28px 12px 28px;
+            background: #fafafa;
+            display: flex;
+            flex-direction: column;
         }
         
-        /* Slower, more deliberate animation for message transitions */
         .message { 
-            margin-bottom: 20px; 
+            margin-bottom: 14px; 
             display: flex; 
-            animation: slowFadeInUp 0.8s cubic-bezier(0.2, 0.9, 0.4, 1.1) forwards;
+            animation: messageSlideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
             opacity: 0;
+            transform: translateY(10px) scale(0.98);
+            flex-shrink: 0;
         }
-        @keyframes slowFadeInUp { 
+        @keyframes messageSlideIn { 
             from { 
                 opacity: 0; 
-                transform: translateY(30px); 
+                transform: translateY(10px) scale(0.98);
             } 
             to { 
                 opacity: 1; 
-                transform: translateY(0); 
+                transform: translateY(0) scale(1);
             } 
         }
         
-        .message.user { justify-content: flex-end; }
+        .message.user { 
+            justify-content: flex-end; 
+        }
+        .message.assistant { 
+            justify-content: flex-start; 
+        }
         
-        /* Optimized message content font sizes */
+        .message-avatar {
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            margin-top: 2px;
+            font-size: 15px;
+            font-weight: 600;
+        }
+        
+        .message.assistant .message-avatar {
+            background: linear-gradient(135deg, #d63384, #b02a6e);
+            color: white;
+            margin-right: 12px;
+        }
+        
+        .message.user .message-avatar {
+            background: #e8e8ec;
+            color: #666;
+            margin-left: 12px;
+            order: 1;
+        }
+        
+        .message-content-wrapper {
+            max-width: 78%;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .message.user .message-content-wrapper {
+            align-items: flex-end;
+        }
+        
+        /* Slightly larger message content */
         .message-content { 
-            max-width: 75%; 
-            padding: 10px 16px; 
+            padding: 12px 18px; 
             border-radius: 18px; 
-            line-height: 1.45; 
+            line-height: 1.6; 
             white-space: pre-wrap; 
             word-wrap: break-word;
-            border: 1px solid #e0e0e0;
-            font-size: 0.9em;
-        }
-        .message.user .message-content { 
-            background: white; 
-            color: #333; 
-            border-bottom-right-radius: 4px;
-            border-color: #d63384;
-        }
-        .message.assistant .message-content { 
-            background: #f5f5f5; 
-            color: #333; 
-            border-bottom-left-radius: 4px; 
-            border-color: #e0e0e0;
+            font-size: 0.92em;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
         }
         
-        .options-container { 
-            margin-top: 10px; 
-            display: flex; 
-            flex-wrap: wrap; 
-            gap: 8px; 
+        .message.user .message-content { 
+            background: linear-gradient(135deg, #d63384, #b02a6e);
+            color: white; 
+            border-bottom-right-radius: 4px;
+            font-weight: 500;
+            font-size: 0.9em;
         }
+        
+        .message.assistant .message-content { 
+            background: white; 
+            color: #333; 
+            border-bottom-left-radius: 4px;
+            border: 1px solid #eee;
+            font-size: 0.9em;
+        }
+        
+        .message-timestamp {
+            font-size: 0.6em;
+            color: #bbb;
+            margin-top: 4px;
+            padding: 0 4px;
+        }
+        
+        .message.user .message-timestamp {
+            text-align: right;
+        }
+        
+        /* Horizontal options */
+        .options-container { 
+            margin-top: 12px; 
+            display: flex; 
+            flex-wrap: nowrap;
+            gap: 10px; 
+            overflow-x: auto;
+            padding: 2px 0 4px 0;
+            -webkit-overflow-scrolling: touch;
+        }
+        
+        .options-container::-webkit-scrollbar {
+            height: 3px;
+        }
+        .options-container::-webkit-scrollbar-track {
+            background: #f0f0f0;
+            border-radius: 4px;
+        }
+        .options-container::-webkit-scrollbar-thumb {
+            background: #d63384;
+            border-radius: 4px;
+        }
+        
+        /* Slightly larger option buttons */
         .option-btn { 
             background: white; 
-            border: 1.5px solid #d63384; 
-            padding: 6px 14px; 
-            border-radius: 20px; 
+            border: 2px solid #e0e0e0; 
+            padding: 8px 22px; 
+            border-radius: 24px; 
             cursor: pointer; 
-            transition: all 0.2s; 
-            font-size: 0.8em; 
-            color: #d63384;
-            font-weight: 500;
+            transition: all 0.25s ease; 
+            font-size: 0.88em; 
+            color: #444;
+            font-weight: 600;
+            white-space: nowrap;
+            flex-shrink: 0;
         }
+        
         .option-btn:hover { 
-            background: #d63384; 
-            color: white; 
-            transform: translateY(-1px); 
+            border-color: #d63384; 
+            color: #d63384;
+            transform: translateY(-2px);
+            box-shadow: 0 3px 12px rgba(214, 51, 132, 0.15);
+            background: #fff;
         }
+        
+        .option-btn:active {
+            transform: scale(0.95);
+        }
+        
         .option-btn.selected { 
             background: #d63384; 
             color: white; 
-            border-color: #d63384; 
+            border-color: #d63384;
+            box-shadow: 0 2px 10px rgba(214, 51, 132, 0.2);
         }
         
         .input-container { 
             background: white; 
-            border-top: 1px solid #e0e0e0; 
-            padding: 16px 20px; 
+            border-top: 1px solid #eee; 
+            padding: 14px 24px; 
             display: flex; 
             gap: 12px; 
+            box-shadow: 0 -2px 8px rgba(0,0,0,0.02);
+            flex-shrink: 0;
         }
+        
         .input-container input { 
             flex: 1; 
-            padding: 10px 16px; 
-            border: 1.5px solid #e0e0e0; 
+            padding: 10px 18px; 
+            border: 2px solid #e8e8ec; 
             border-radius: 24px; 
             font-size: 0.9em; 
             outline: none; 
+            transition: all 0.25s ease;
+            background: #f8f8fa;
         }
+        
         .input-container input:focus { 
             border-color: #d63384; 
+            background: white;
+            box-shadow: 0 0 0 3px rgba(214, 51, 132, 0.06);
         }
+        
+        .input-container input::placeholder {
+            color: #bbb;
+            font-weight: 400;
+            font-size: 0.9em;
+        }
+        
         .input-container button { 
-            background: white; 
-            color: #d63384; 
-            border: 1.5px solid #d63384; 
-            padding: 10px 20px; 
+            background: linear-gradient(135deg, #d63384, #b02a6e);
+            color: white; 
+            border: none; 
+            padding: 10px 26px; 
             border-radius: 24px; 
             cursor: pointer; 
-            font-size: 0.9em; 
-            font-weight: 600; 
-            transition: all 0.2s;
+            font-size: 0.88em; 
+            font-weight: 700; 
+            transition: all 0.25s ease;
+            white-space: nowrap;
+            box-shadow: 0 2px 8px rgba(214, 51, 132, 0.15);
+            letter-spacing: 0.3px;
         }
+        
         .input-container button:hover { 
-            background: #d63384; 
-            color: white; 
-            transform: translateY(-1px); 
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(214, 51, 132, 0.25);
         }
+        
+        .input-container button:active {
+            transform: scale(0.96);
+        }
+        
         .input-container button:disabled { 
             opacity: 0.5; 
             cursor: not-allowed; 
-            transform: none; 
+            transform: none !important;
+            box-shadow: none !important;
         }
         
         .restart-btn { 
             background: white; 
             color: #666; 
-            border: 1.5px solid #e0e0e0; 
+            border: 2px solid #e8e8ec; 
             margin-top: 0;
             width: 100%;
-        }
-        .restart-btn:hover { 
-            background: #f5f5f5; 
-            color: #333; 
-            border-color: #d63384;
-            transform: translateY(-1px); 
+            box-shadow: none !important;
+            background: #f8f8fa;
+            font-weight: 600;
+            font-size: 0.88em;
         }
         
-        /* AI Thinking / Processing Indicator */
+        .restart-btn:hover { 
+            background: white; 
+            color: #d63384; 
+            border-color: #d63384;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(214, 51, 132, 0.08) !important;
+        }
+        
         .ai-thinking {
             display: inline-flex;
             align-items: center;
             gap: 10px;
-            padding: 8px 16px;
+            padding: 10px 18px;
             background: white;
             border-radius: 20px;
             border-bottom-left-radius: 4px;
-            border: 1px solid #e0e0e0;
+            border: 1px solid #eee;
         }
+        
         .ai-spinner {
-            width: 16px;
-            height: 16px;
-            border: 2px solid #f0f0f0;
-            border-top: 2px solid #d63384;
+            width: 18px;
+            height: 18px;
+            border: 2.5px solid #f0f0f0;
+            border-top: 2.5px solid #d63384;
             border-radius: 50%;
             animation: spin 0.8s linear infinite;
         }
@@ -1745,78 +1908,108 @@ def chat():
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+        
         .ai-thinking-text {
-            font-size: 0.8em;
+            font-size: 0.85em;
             color: #d63384;
-            font-weight: 500;
+            font-weight: 600;
         }
         .ai-pulse {
-            animation: subtlePulse 1.2s ease-in-out infinite;
+            animation: subtlePulse 1.4s ease-in-out infinite;
         }
         @keyframes subtlePulse {
             0%, 100% { opacity: 0.6; }
             50% { opacity: 1; }
         }
         
-        /* Typing indicator */
         .typing-indicator {
             display: inline-flex;
             align-items: center;
             gap: 5px;
-            padding: 8px 14px;
-            background: #f5f5f5;
+            padding: 10px 16px;
+            background: white;
             border-radius: 18px;
             border-bottom-left-radius: 4px;
-            border: 1px solid #e0e0e0;
+            border: 1px solid #eee;
         }
         .typing-dot {
-            width: 7px;
-            height: 7px;
+            width: 8px;
+            height: 8px;
             background: #d63384;
             border-radius: 50%;
-            animation: typingPulse 1.2s infinite ease-in-out;
+            animation: typingPulse 1.4s infinite ease-in-out;
         }
         .typing-dot:nth-child(2) { animation-delay: 0.2s; }
         .typing-dot:nth-child(3) { animation-delay: 0.4s; }
         @keyframes typingPulse {
-            0%, 60%, 100% { transform: scale(0.6); opacity: 0.4; }
+            0%, 60%, 100% { transform: scale(0.5); opacity: 0.3; }
             30% { transform: scale(1); opacity: 1; }
         }
         
-        /* Scrollbar styling */
         .answers-list::-webkit-scrollbar,
         .messages-container::-webkit-scrollbar {
-            width: 5px;
+            width: 4px;
         }
         .answers-list::-webkit-scrollbar-track,
         .messages-container::-webkit-scrollbar-track {
-            background: #f1f1f1;
+            background: transparent;
         }
         .answers-list::-webkit-scrollbar-thumb,
         .messages-container::-webkit-scrollbar-thumb {
-            background: #ccc;
-            border-radius: 3px;
+            background: #ddd;
+            border-radius: 4px;
         }
         .answers-list::-webkit-scrollbar-thumb:hover,
         .messages-container::-webkit-scrollbar-thumb:hover {
             background: #d63384;
         }
         
+        .chat-progress {
+            padding: 4px 20px 8px 20px;
+            text-align: center;
+            font-size: 0.65em;
+            color: #aaa;
+            letter-spacing: 0.3px;
+            font-weight: 500;
+            flex-shrink: 0;
+        }
+        
+        .chat-progress-bar {
+            height: 3px;
+            background: #eee;
+            border-radius: 4px;
+            margin-top: 4px;
+            overflow: hidden;
+        }
+        
+        .chat-progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #d63384, #b02a6e);
+            border-radius: 4px;
+            transition: width 0.5s ease;
+            width: 0%;
+        }
+        
         @media (max-width: 768px) { 
-            .message-content { max-width: 85%; } 
-            .input-container { padding: 12px 16px; }
-            .sidebar { width: 260px; }
-            .savy-logo-sidebar { width: 130px; }
-            .messages-container { padding: 16px; }
-            .sidebar-logo { padding: 24px 20px; }
+            .message-content-wrapper { max-width: 85%; } 
+            .input-container { padding: 10px 14px; }
+            .sidebar { width: 280px; }
+            .savy-logo-sidebar { width: 120px; }
+            .messages-container { padding: 12px 14px 10px 14px; }
+            .sidebar-logo { padding: 20px 16px; }
+            .message-content { font-size: 0.88em; padding: 10px 16px; }
+            .option-btn { padding: 6px 16px; font-size: 0.82em; }
+            .answer-item { padding: 10px 12px; }
+            .answer-value { font-size: 0.9em; }
+            .input-container input { padding: 8px 14px; font-size: 0.85em; }
+            .input-container button { padding: 8px 18px; font-size: 0.82em; }
+            .message-avatar { width: 28px; height: 28px; font-size: 12px; }
         }
     </style>
 </head>
 <body>
     <div class="app-container">
-        <!-- Sidebar - with centered logo and centered answers header -->
         <div class="sidebar" id="sidebar">
-            <!-- SAVY Logo - CENTERED -->
             <div class="sidebar-logo">
                 <svg class="savy-logo-sidebar" viewBox="0 0 200 60" xmlns="http://www.w3.org/2000/svg">
                     <text x="50%" y="42" text-anchor="middle" font-family="Arial, sans-serif" font-size="42" font-weight="bold" fill="#1a1a2e">SAVY</text>
@@ -1824,16 +2017,16 @@ def chat():
                 </svg>
             </div>
             
-            <!-- Your Answers header - CENTERED -->
             <div class="sidebar-header">
                 <h3>📋 Your Answers</h3>
-                <p>Click any answer to edit</p>
+                <p>Tap any answer to edit</p>
             </div>
             <div class="answers-list" id="answers-list">
                 {% if answers_list %}
                     {% for answer in answers_list %}
                         <div class="answer-item" onclick="editAnswer('{{ answer.ref }}')">
                             <div class="answer-question">
+                                <span class="answer-number">{{ loop.index }}</span>
                                 {{ answer.title }}
                                 <span class="edit-icon">✏️</span>
                             </div>
@@ -1841,36 +2034,57 @@ def chat():
                         </div>
                     {% endfor %}
                 {% else %}
-                    <div class="no-answers">No answers yet. Start answering questions to see them here.</div>
+                    <div class="no-answers">
+                        <span class="no-answers-icon">💬</span>
+                        No answers yet<br>Start answering questions to see them here
+                    </div>
                 {% endif %}
             </div>
         </div>
         
-        <!-- Chat Container - No top bar -->
         <div class="chat-container">
             <div class="messages-container" id="messages-container">
                 {% for message in messages %}
-                    <div class="message {{ message.role }}" style="animation: slowFadeInUp 0.6s ease-out forwards;">
-                        <div class="message-content">
-                            {{ message.content | replace('\\n', '<br>') | safe }}
-                            {% if message.options %}
-                                <div class="options-container">
-                                    {% for option in message.options %}
-                                        {% set display_option = ('✓ Yes' if option == 'Yes' else '✗ No' if option == 'No' else option) %}
-                                        <button class="option-btn" onclick="sendMessage('{{ option | replace("'", "\\'") | replace("\\n", " ") }}')">
-                                            {{ display_option | replace('\\n', ' ') }}
-                                        </button>
-                                    {% endfor %}
-                                </div>
-                            {% endif %}
+                    <div class="message {{ message.role }}" style="animation: messageSlideIn 0.3s ease-out forwards;">
+                        <div class="message-avatar">
+                            {% if message.role == 'assistant' %}🤖{% else %}👤{% endif %}
+                        </div>
+                        <div class="message-content-wrapper">
+                            <div class="message-content">
+                                {{ message.content | replace('\\n', '<br>') | safe }}
+                                {% if message.options %}
+                                    <div class="options-container">
+                                        {% for option in message.options %}
+                                            {% set display_option = ('✓ Yes' if option == 'Yes' else '✗ No' if option == 'No' else option) %}
+                                            <button class="option-btn" onclick="sendMessage('{{ option | replace("'", "\\'") | replace("\\n", " ") }}')">
+                                                {{ display_option | replace('\\n', ' ') }}
+                                            </button>
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
+                            <div class="message-timestamp">
+                                {% if message.timestamp %}
+                                    {{ message.timestamp | replace('T', ' ') | truncate(16, True, '') }}
+                                {% endif %}
+                            </div>
                         </div>
                     </div>
                 {% endfor %}
             </div>
             
+            {% if not completed and messages|length > 1 %}
+            <div class="chat-progress">
+                <span>{{ phase_names[phase] if phase in phase_names else 'Assessment' }}</span>
+                <div class="chat-progress-bar">
+                    <div class="chat-progress-bar-fill" style="width: {{ ((history|length) / 15 * 100)|round }}%;"></div>
+                </div>
+            </div>
+            {% endif %}
+            
             <div class="input-container">
                 <input type="text" id="message-input" placeholder="Type your answer here..." autocomplete="off">
-                <button onclick="sendMessage()" id="send-btn">Send</button>
+                <button onclick="sendMessage()" id="send-btn">Send →</button>
             </div>
             
             {% if completed %}
@@ -1890,7 +2104,8 @@ def chat():
         function scrollToBottom() { 
             messagesContainer.scrollTop = messagesContainer.scrollHeight; 
         }
-        scrollToBottom();
+        
+        setTimeout(scrollToBottom, 100);
         
         function editAnswer(ref) {
             if (confirm('Edit this answer? This will reset all answers after this question.')) {
@@ -1916,10 +2131,20 @@ def chat():
             let answer = predefinedAnswer || messageInput.value.trim();
             if (!answer && !predefinedAnswer) return;
             
-            addMessageToUI('user', answer);
-            if (!predefinedAnswer) messageInput.value = '';
+            const userMsg = document.createElement('div');
+            userMsg.className = 'message user';
+            userMsg.innerHTML = `
+                <div class="message-content-wrapper">
+                    <div class="message-content">${answer.replace(/\\n/g, '<br>')}</div>
+                    <div class="message-timestamp">${new Date().toLocaleTimeString()}</div>
+                </div>
+                <div class="message-avatar">👤</div>
+            `;
+            messagesContainer.appendChild(userMsg);
             
-            // Show AI thinking indicator for assistant responses (makes AI integration obvious)
+            if (!predefinedAnswer) messageInput.value = '';
+            scrollToBottom();
+            
             showAIThinkingIndicator();
             
             isWaitingForResponse = true;
@@ -1933,47 +2158,86 @@ def chat():
                 });
                 const data = await response.json();
                 
-                // Remove AI thinking indicator
                 removeAIThinkingIndicator();
-                
                 setInputEnabled(true);
                 
                 if (data.messages && data.messages.length > 0) {
-                    // Add each message with a noticeable delay to show AI processing
                     for (let i = 0; i < data.messages.length; i++) {
                         const msg = data.messages[i];
                         
-                        // Show typing indicator before each assistant message
                         if (msg.role === 'assistant') {
                             showTypingIndicator();
-                            await new Promise(resolve => setTimeout(resolve, 800));
+                            await new Promise(resolve => setTimeout(resolve, 500));
                             removeTypingIndicator();
                         }
                         
-                        await new Promise(resolve => setTimeout(resolve, 300));
-                        addMessageToUI(msg.role, msg.content, msg.options);
+                        await new Promise(resolve => setTimeout(resolve, 150));
+                        
+                        const msgDiv = document.createElement('div');
+                        msgDiv.className = `message ${msg.role}`;
+                        msgDiv.innerHTML = `
+                            <div class="message-avatar">${msg.role === 'assistant' ? '🤖' : '👤'}</div>
+                            <div class="message-content-wrapper">
+                                <div class="message-content">${msg.content.replace(/\\n/g, '<br>')}</div>
+                                <div class="message-timestamp">${new Date().toLocaleTimeString()}</div>
+                            </div>
+                        `;
+                        
+                        if (msg.options && msg.options.length > 0) {
+                            const contentDiv = msgDiv.querySelector('.message-content');
+                            const optionsDiv = document.createElement('div');
+                            optionsDiv.className = 'options-container';
+                            msg.options.forEach(option => {
+                                const btn = document.createElement('button');
+                                btn.className = 'option-btn';
+                                let displayText = option.replace(/\\n/g, ' ');
+                                if (displayText === 'Yes') {
+                                    displayText = '✓ Yes';
+                                } else if (displayText === 'No') {
+                                    displayText = '✗ No';
+                                }
+                                btn.textContent = displayText;
+                                btn.onclick = () => {
+                                    optionsDiv.querySelectorAll('.option-btn').forEach(b => b.classList.remove('selected'));
+                                    btn.classList.add('selected');
+                                    sendMessage(option);
+                                };
+                                optionsDiv.appendChild(btn);
+                            });
+                            contentDiv.appendChild(optionsDiv);
+                        }
+                        
+                        messagesContainer.appendChild(msgDiv);
                         scrollToBottom();
                     }
                 }
                 
                 if (data.status === 'completed' || data.status === 'phase_complete') {
-                    // Show a special AI summary processing message
                     if (data.status === 'completed') {
                         showAIProcessingMessage();
-                        await new Promise(resolve => setTimeout(resolve, 2000));
+                        await new Promise(resolve => setTimeout(resolve, 1200));
                         removeAIProcessingMessage();
                     }
-                    setTimeout(() => window.location.reload(), 1500);
+                    setTimeout(() => window.location.reload(), 1000);
                 } else {
-                    // Refresh page to update sidebar after a delay
-                    setTimeout(() => window.location.reload(), 800);
+                    setTimeout(() => window.location.reload(), 500);
                 }
             } catch (error) { 
                 console.error('Error:', error); 
                 removeAIThinkingIndicator();
                 removeTypingIndicator();
                 setInputEnabled(true); 
-                addMessageToUI('assistant', 'Sorry, there was an error. Please try again.'); 
+                const msgDiv = document.createElement('div');
+                msgDiv.className = 'message assistant';
+                msgDiv.innerHTML = `
+                    <div class="message-avatar">🤖</div>
+                    <div class="message-content-wrapper">
+                        <div class="message-content">Sorry, there was an error. Please try again.</div>
+                        <div class="message-timestamp">${new Date().toLocaleTimeString()}</div>
+                    </div>
+                `;
+                messagesContainer.appendChild(msgDiv);
+                scrollToBottom();
             } finally {
                 isWaitingForResponse = false;
             }
@@ -1984,10 +2248,13 @@ def chat():
             indicatorDiv.id = 'ai-thinking-indicator';
             indicatorDiv.className = 'message assistant';
             indicatorDiv.innerHTML = `
-                <div class="message-content">
-                    <div class="ai-thinking">
-                        <div class="ai-spinner"></div>
-                        <div class="ai-thinking-text ai-pulse">🤖 AI is analyzing your response...</div>
+                <div class="message-avatar">🤖</div>
+                <div class="message-content-wrapper">
+                    <div class="message-content">
+                        <div class="ai-thinking">
+                            <div class="ai-spinner"></div>
+                            <div class="ai-thinking-text ai-pulse">AI is analyzing...</div>
+                        </div>
                     </div>
                 </div>
             `;
@@ -2005,11 +2272,14 @@ def chat():
             indicatorDiv.id = 'typing-indicator';
             indicatorDiv.className = 'message assistant';
             indicatorDiv.innerHTML = `
-                <div class="message-content">
-                    <div class="typing-indicator">
-                        <span class="typing-dot"></span>
-                        <span class="typing-dot"></span>
-                        <span class="typing-dot"></span>
+                <div class="message-avatar">🤖</div>
+                <div class="message-content-wrapper">
+                    <div class="message-content">
+                        <div class="typing-indicator">
+                            <span class="typing-dot"></span>
+                            <span class="typing-dot"></span>
+                            <span class="typing-dot"></span>
+                        </div>
                     </div>
                 </div>
             `;
@@ -2027,10 +2297,13 @@ def chat():
             msgDiv.id = 'ai-processing-msg';
             msgDiv.className = 'message assistant';
             msgDiv.innerHTML = `
-                <div class="message-content">
-                    <div class="ai-thinking" style="background: white; border-left-color: #d63384;">
-                        <div class="ai-spinner"></div>
-                        <div class="ai-thinking-text" style="color: #d63384;">✨ Generating your personalized AI tax summary... ✨</div>
+                <div class="message-avatar">🤖</div>
+                <div class="message-content-wrapper">
+                    <div class="message-content">
+                        <div class="ai-thinking" style="background: #f8f0f5; border-color: #d63384;">
+                            <div class="ai-spinner"></div>
+                            <div class="ai-thinking-text" style="color: #d63384;">✨ Generating your summary...</div>
+                        </div>
                     </div>
                 </div>
             `;
@@ -2043,39 +2316,6 @@ def chat():
             if (msg) msg.remove();
         }
         
-        function addMessageToUI(role, content, options = null) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${role}`;
-            const contentDiv = document.createElement('div');
-            contentDiv.className = 'message-content';
-            contentDiv.innerHTML = content.replace(/\\n/g, '<br>');
-            if (options && options.length > 0) {
-                const optionsDiv = document.createElement('div');
-                optionsDiv.className = 'options-container';
-                options.forEach(option => {
-                    const btn = document.createElement('button');
-                    btn.className = 'option-btn';
-                    let displayText = option.replace(/\\n/g, ' ');
-                    if (displayText === 'Yes') {
-                        displayText = '✓ Yes';
-                    } else if (displayText === 'No') {
-                        displayText = '✗ No';
-                    }
-                    btn.textContent = displayText;
-                    btn.onclick = () => {
-                        optionsDiv.querySelectorAll('.option-btn').forEach(b => b.classList.remove('selected'));
-                        btn.classList.add('selected');
-                        sendMessage(option);
-                    };
-                    optionsDiv.appendChild(btn);
-                });
-                contentDiv.appendChild(optionsDiv);
-            }
-            messageDiv.appendChild(contentDiv);
-            messagesContainer.appendChild(messageDiv);
-            scrollToBottom();
-        }
-        
         function setInputEnabled(enabled) {
             messageInput.disabled = !enabled;
             sendBtn.disabled = !enabled;
@@ -2086,8 +2326,14 @@ def chat():
             fetch('/restart_chat', {method: 'POST'}).then(() => window.location.reload()); 
         }
         
-        messageInput.addEventListener('keypress', function(e) { if (e.key === 'Enter') sendMessage(); });
-        messageInput.focus();
+        messageInput.addEventListener('keypress', function(e) { 
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage(); 
+            }
+        });
+        
+        setTimeout(() => messageInput.focus(), 300);
     </script>
 </body>
 </html>
