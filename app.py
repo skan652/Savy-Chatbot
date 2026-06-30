@@ -58,6 +58,7 @@ SAVY_GRADIENT = f"linear-gradient(45deg, {SAVY_PINK}, #a02070)"
 
 SAVY_API_BASE_URL = os.environ.get("SAVY_API_BASE_URL", "https://api.savyapp.dev")
 SAVY_TOKEN = os.environ.get("SAVY_TOKEN")
+SAVY_USER_ID = os.environ.get("SAVY_USER_ID")
 
 def get_savy_headers():
     """Get headers for Savy API requests"""
@@ -113,12 +114,98 @@ def make_savy_request(endpoint, method="GET", data=None, params=None):
         return {"error": str(e)}
 
 # =========================================================
-# SAVY API - STEP 2: INITIATE REFUND ESTIMATION
+# SAVY API - AUTHENTICATION (Step 1)
+# =========================================================
+
+def authenticate_savy_user(email, password):
+    """
+    Step 1: Authenticate user and get token + user ID
+    POST /api/v1/auth/email/login
+    """
+    try:
+        logger.info("🔐 Authenticating user with Savy API...")
+        
+        login_data = {
+            "email": email,
+            "password": password
+        }
+        
+        # Use the correct email login endpoint
+        response = make_savy_request("api/v1/auth/email/login", "POST", login_data)
+        
+        if response and not response.get("error"):
+            # Extract token and user ID from response
+            token = response.get("token") or response.get("accessToken") or response.get("access_token")
+            user_id = response.get("userId") or response.get("user") and response.get("user").get("id") or response.get("id")
+            
+            if token:
+                # Save token to .env file
+                env_path = os.path.join(os.getcwd(), ".env")
+                env_vars = {}
+                
+                # Read existing .env
+                if os.path.exists(env_path):
+                    with open(env_path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            if line.strip() and "=" in line:
+                                key, value = line.split("=", 1)
+                                env_vars[key.strip()] = value.strip().strip('"').strip("'")
+                
+                # Update with new values
+                env_vars["SAVY_TOKEN"] = token
+                if user_id:
+                    env_vars["SAVY_USER_ID"] = str(user_id)
+                
+                # Write back to .env
+                with open(env_path, "w", encoding="utf-8") as f:
+                    for key, value in env_vars.items():
+                        f.write(f'{key}="{value}"\n')
+                
+                # Update current environment
+                os.environ["SAVY_TOKEN"] = token
+                if user_id:
+                    os.environ["SAVY_USER_ID"] = str(user_id)
+                
+                # Update global variables
+                global SAVY_TOKEN, SAVY_USER_ID
+                SAVY_TOKEN = token
+                SAVY_USER_ID = str(user_id) if user_id else None
+                
+                logger.info(f"✅ Authentication successful! Token saved. User ID: {user_id}")
+                
+                return {
+                    "success": True,
+                    "token": token,
+                    "user_id": user_id,
+                    "data": response
+                }
+            else:
+                logger.error(f"❌ No token in response: {response}")
+                return {
+                    "success": False,
+                    "error": "No token received"
+                }
+        else:
+            logger.error(f"❌ Authentication failed: {response}")
+            return {
+                "success": False,
+                "error": response
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error authenticating user: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+# =========================================================
+# SAVY API - REFUND ESTIMATION
 # =========================================================
 
 def initiate_refund_estimation():
     """
-    Step 2: Initiate a refund estimation with empty body
+    Initiate a refund estimation with empty body
     POST /api/v1/refund-estimations
     """
     try:
@@ -155,13 +242,9 @@ def initiate_refund_estimation():
             "error": str(e)
         }
 
-# =========================================================
-# SAVY API - STEP 3: UPDATE REFUND ESTIMATION REAL-TIME
-# =========================================================
-
 def update_refund_estimation(estimation_id, answer_data):
     """
-    Step 3: Update the refund estimation in real-time with client answers
+    Update the refund estimation in real-time with client answers
     PATCH /api/v1/refund-estimations/{id}
     """
     try:
@@ -190,6 +273,198 @@ def update_refund_estimation(estimation_id, answer_data):
             
     except Exception as e:
         logger.error(f"❌ Error updating refund estimation: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+# =========================================================
+# SAVY API - TAX ESTIMATION (Steps 2-3)
+# =========================================================
+
+def initiate_tax_estimation():
+    """
+    Step 2: Initiate a tax estimation with user ID and start date
+    POST /api/v1/estimations
+    Body: { "userId": "user_id", "startDate": "2024-01-01" }
+    """
+    try:
+        logger.info("🔄 Initiating tax estimation with Savy API...")
+        
+        # Get user ID from environment or session
+        user_id = SAVY_USER_ID or session.get("savy_user_id")
+        
+        if not user_id:
+            logger.error("❌ No user ID available for estimation")
+            return {
+                "success": False,
+                "error": "No user ID available. Please authenticate first."
+            }
+        
+        # Prepare request body with userId and startDate
+        estimation_data = {
+            "userId": user_id,
+            "startDate": datetime.now().strftime("%Y-%m-%d")
+        }
+        
+        logger.info(f"📦 Estimation data: {json.dumps(estimation_data, indent=2)}")
+        
+        # Make POST request with userId and startDate
+        response = make_savy_request("api/v1/estimations", "POST", estimation_data)
+        
+        if response and not response.get("error"):
+            estimation_id = response.get("id") or response.get("estimationId") or response.get("_id")
+            logger.info(f"✅ Tax estimation initiated successfully! ID: {estimation_id}")
+            
+            # Store the estimation ID in session
+            if estimation_id:
+                session["tax_estimation_id"] = estimation_id
+                session.modified = True
+            
+            return {
+                "success": True,
+                "data": response,
+                "estimation_id": estimation_id
+            }
+        else:
+            logger.error(f"❌ Failed to initiate tax estimation: {response}")
+            return {
+                "success": False,
+                "error": response
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error initiating tax estimation: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+def update_tax_estimation(estimation_id, answer_data):
+    """
+    Step 3: Update the tax estimation in real-time with client answers
+    PATCH /api/v1/estimations/{id}
+    """
+    try:
+        if not estimation_id:
+            logger.warning("No estimation ID available to update")
+            return {"success": False, "error": "No estimation ID"}
+        
+        logger.info(f"🔄 Updating tax estimation {estimation_id} with answer data...")
+        
+        # Make PATCH request with the answer data
+        response = make_savy_request(f"api/v1/estimations/{estimation_id}", "PATCH", answer_data)
+        
+        if response and not response.get("error"):
+            logger.info(f"✅ Tax estimation {estimation_id} updated successfully")
+            return {
+                "success": True,
+                "data": response,
+                "estimation_id": estimation_id
+            }
+        else:
+            logger.error(f"❌ Failed to update tax estimation: {response}")
+            return {
+                "success": False,
+                "error": response
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error updating tax estimation: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+def get_tax_estimation(estimation_id):
+    """
+    Get a specific tax estimation by ID
+    GET /api/v1/estimations/{id}
+    """
+    try:
+        if not estimation_id:
+            return {"success": False, "error": "No estimation ID"}
+        
+        logger.info(f"📊 Getting tax estimation {estimation_id}...")
+        
+        response = make_savy_request(f"api/v1/estimations/{estimation_id}", "GET")
+        
+        if response and not response.get("error"):
+            return {
+                "success": True,
+                "data": response
+            }
+        else:
+            logger.error(f"❌ Failed to get tax estimation: {response}")
+            return {
+                "success": False,
+                "error": response
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error getting tax estimation: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+def get_all_tax_estimations():
+    """
+    Get all tax estimations for the current user
+    GET /api/v1/estimations
+    """
+    try:
+        logger.info("📊 Getting all tax estimations...")
+        
+        response = make_savy_request("api/v1/estimations", "GET")
+        
+        if response and not response.get("error"):
+            return {
+                "success": True,
+                "data": response
+            }
+        else:
+            logger.error(f"❌ Failed to get tax estimations: {response}")
+            return {
+                "success": False,
+                "error": response
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error getting tax estimations: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+def delete_tax_estimation(estimation_id):
+    """
+    Delete a tax estimation
+    DELETE /api/v1/estimations/{id}
+    """
+    try:
+        if not estimation_id:
+            return {"success": False, "error": "No estimation ID"}
+        
+        logger.info(f"🗑️ Deleting tax estimation {estimation_id}...")
+        
+        response = make_savy_request(f"api/v1/estimations/{estimation_id}", "DELETE")
+        
+        if response and not response.get("error"):
+            logger.info(f"✅ Tax estimation {estimation_id} deleted successfully")
+            return {
+                "success": True,
+                "data": response
+            }
+        else:
+            logger.error(f"❌ Failed to delete tax estimation: {response}")
+            return {
+                "success": False,
+                "error": response
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error deleting tax estimation: {e}")
         return {
             "success": False,
             "error": str(e)
@@ -590,7 +865,11 @@ def init_session():
             "sidebar_open": True,
             "savy_estimation_id": None,
             "refund_estimation_id": None,
-            "estimation_initiated": False
+            "tax_estimation_id": None,
+            "estimation_initiated": False,
+            "tax_estimation_initiated": False,
+            "savy_authenticated": False,
+            "savy_user_id": None
         }
         
         for key, default_value in defaults.items():
@@ -1137,8 +1416,26 @@ def complete_assessment():
             else:
                 ai_summary = "Thank you for completing the tax assessment. Your responses have been recorded and will be reviewed by our tax specialists."
         
-        # Send data to Savy API
+        # Send data to Savy API - Refund Estimation
         send_to_savy(answers, phase, phase_name, ai_summary)
+        
+        # Update the tax estimation with final data
+        tax_estimation_id = session.get("tax_estimation_id")
+        if tax_estimation_id and session.get("tax_estimation_initiated"):
+            try:
+                final_data = {
+                    "answers": answers,
+                    "completed_at": datetime.now().isoformat(),
+                    "phase": phase,
+                    "total_questions": len(session.get("history", [])),
+                    "estimation_data": session.get("estimation_data", {}),
+                    "ai_summary": ai_summary,
+                    "status": "completed"
+                }
+                update_tax_estimation(tax_estimation_id, final_data)
+                logger.info(f"✅ Tax estimation {tax_estimation_id} updated with final data")
+            except Exception as e:
+                logger.error(f"Error updating tax estimation with final data: {e}")
         
         # Build final message
         final_message = f"🎉 **{phase_name} Complete!** 🎉\n\n"
@@ -1221,23 +1518,360 @@ def before_request():
     try:
         init_session()
         
-        allowed_routes = ["passkey_page", "verify_passkey", "static", "favicon", "toggle_sidebar", "edit_answer"]
+        allowed_routes = ["passkey_page", "verify_passkey", "static", "favicon", "toggle_sidebar", "edit_answer", "login_page", "auth_email_login"]
         if request.endpoint in allowed_routes:
             return
+        
+        # Check if user is authenticated for Savy API
+        if not session.get("savy_authenticated") and not SAVY_USER_ID:
+            return redirect(url_for("login_page"))
         
         if not session.get("passkey_verified"):
             return redirect(url_for("passkey_page"))
             
     except Exception as e:
         logger.error(f"Error in before_request: {e}")
-        return redirect(url_for("passkey_page"))
+        return redirect(url_for("login_page"))
 
 @app.route("/")
 @safe_route
 def index():
+    if not session.get("savy_authenticated") and not SAVY_USER_ID:
+        return redirect(url_for("login_page"))
     if not session.get("passkey_verified"):
         return redirect(url_for("passkey_page"))
     return redirect(url_for("chat"))
+
+# =========================================================
+# AUTHENTICATION ROUTES
+# =========================================================
+
+@app.route("/login", methods=["GET", "POST"])
+@safe_route
+def login_page():
+    """Login page for Savy API authentication"""
+    if session.get("savy_authenticated"):
+        return redirect(url_for("passkey_page"))
+    
+    if request.method == "POST":
+        email = request.form.get("email")
+        password = request.form.get("password")
+        
+        if not email or not password:
+            return render_template_string("""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Login - Savy Tax Assistant</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    * { box-sizing: border-box; }
+                    body {
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                        background: #f5f5f5;
+                        margin: 0;
+                        padding: 20px;
+                        min-height: 100vh;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                    }
+                    .container {
+                        background: white;
+                        max-width: 400px;
+                        width: 100%;
+                        padding: 40px;
+                        border-radius: 24px;
+                        box-shadow: 0 20px 60px rgba(0,0,0,0.1);
+                        text-align: center;
+                    }
+                    h1 { color: #1a1a2e; margin-bottom: 10px; }
+                    .subtitle { color: #666; margin-bottom: 30px; }
+                    input {
+                        width: 100%;
+                        padding: 14px;
+                        border: 2px solid #e0e0e0;
+                        border-radius: 12px;
+                        font-size: 1em;
+                        margin-bottom: 15px;
+                        transition: border-color 0.3s ease;
+                    }
+                    input:focus {
+                        outline: none;
+                        border-color: #d63384;
+                    }
+                    button {
+                        width: 100%;
+                        padding: 14px;
+                        background: linear-gradient(45deg, #d63384, #a02070);
+                        color: white;
+                        border: none;
+                        border-radius: 12px;
+                        font-size: 1.1em;
+                        cursor: pointer;
+                        font-weight: 600;
+                        transition: transform 0.2s ease, box-shadow 0.2s ease;
+                    }
+                    button:hover {
+                        transform: translateY(-2px);
+                        box-shadow: 0 10px 20px rgba(214, 51, 132, 0.3);
+                    }
+                    .error {
+                        background: #fee;
+                        padding: 12px;
+                        border-radius: 12px;
+                        color: #c33;
+                        margin-bottom: 20px;
+                        font-size: 0.9em;
+                    }
+                    .pink-accent { color: #d63384; font-weight: 600; }
+                    .savy-logo { font-size: 2.5em; font-weight: 700; color: #1a1a2e; margin-bottom: 5px; }
+                    .savy-logo span { color: #d63384; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="savy-logo">SAV<span>Y</span></div>
+                    <p class="subtitle">Sign in to access your tax assessment</p>
+                    <div class="error">Please provide both email and password</div>
+                    <form method="POST">
+                        <input type="email" name="email" placeholder="Email address" required>
+                        <input type="password" name="password" placeholder="Password" required>
+                        <button type="submit">Sign In</button>
+                    </form>
+                </div>
+            </body>
+            </html>
+            """)
+        
+        result = authenticate_savy_user(email, password)
+        
+        if result.get("success"):
+            session["savy_authenticated"] = True
+            session["savy_user_id"] = result.get("user_id")
+            session.modified = True
+            
+            return redirect(url_for("passkey_page"))
+        else:
+            return render_template_string("""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Login - Savy Tax Assistant</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    * { box-sizing: border-box; }
+                    body {
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                        background: #f5f5f5;
+                        margin: 0;
+                        padding: 20px;
+                        min-height: 100vh;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                    }
+                    .container {
+                        background: white;
+                        max-width: 400px;
+                        width: 100%;
+                        padding: 40px;
+                        border-radius: 24px;
+                        box-shadow: 0 20px 60px rgba(0,0,0,0.1);
+                        text-align: center;
+                    }
+                    h1 { color: #1a1a2e; margin-bottom: 10px; }
+                    .subtitle { color: #666; margin-bottom: 30px; }
+                    input {
+                        width: 100%;
+                        padding: 14px;
+                        border: 2px solid #e0e0e0;
+                        border-radius: 12px;
+                        font-size: 1em;
+                        margin-bottom: 15px;
+                        transition: border-color 0.3s ease;
+                    }
+                    input:focus {
+                        outline: none;
+                        border-color: #d63384;
+                    }
+                    button {
+                        width: 100%;
+                        padding: 14px;
+                        background: linear-gradient(45deg, #d63384, #a02070);
+                        color: white;
+                        border: none;
+                        border-radius: 12px;
+                        font-size: 1.1em;
+                        cursor: pointer;
+                        font-weight: 600;
+                        transition: transform 0.2s ease, box-shadow 0.2s ease;
+                    }
+                    button:hover {
+                        transform: translateY(-2px);
+                        box-shadow: 0 10px 20px rgba(214, 51, 132, 0.3);
+                    }
+                    .error {
+                        background: #fee;
+                        padding: 12px;
+                        border-radius: 12px;
+                        color: #c33;
+                        margin-bottom: 20px;
+                        font-size: 0.9em;
+                    }
+                    .pink-accent { color: #d63384; font-weight: 600; }
+                    .savy-logo { font-size: 2.5em; font-weight: 700; color: #1a1a2e; margin-bottom: 5px; }
+                    .savy-logo span { color: #d63384; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="savy-logo">SAV<span>Y</span></div>
+                    <p class="subtitle">Sign in to access your tax assessment</p>
+                    <div class="error">Invalid email or password. Please try again.</div>
+                    <form method="POST">
+                        <input type="email" name="email" placeholder="Email address" required>
+                        <input type="password" name="password" placeholder="Password" required>
+                        <button type="submit">Sign In</button>
+                    </form>
+                </div>
+            </body>
+            </html>
+            """)
+    
+    # GET request - show login form
+    return render_template_string("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Login - Savy Tax Assistant</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            * { box-sizing: border-box; }
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                background: #f5f5f5;
+                margin: 0;
+                padding: 20px;
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .container {
+                background: white;
+                max-width: 400px;
+                width: 100%;
+                padding: 40px;
+                border-radius: 24px;
+                box-shadow: 0 20px 60px rgba(0,0,0,0.1);
+                text-align: center;
+            }
+            h1 { color: #1a1a2e; margin-bottom: 10px; }
+            .subtitle { color: #666; margin-bottom: 30px; }
+            input {
+                width: 100%;
+                padding: 14px;
+                border: 2px solid #e0e0e0;
+                border-radius: 12px;
+                font-size: 1em;
+                margin-bottom: 15px;
+                transition: border-color 0.3s ease;
+            }
+            input:focus {
+                outline: none;
+                border-color: #d63384;
+            }
+            button {
+                width: 100%;
+                padding: 14px;
+                background: linear-gradient(45deg, #d63384, #a02070);
+                color: white;
+                border: none;
+                border-radius: 12px;
+                font-size: 1.1em;
+                cursor: pointer;
+                font-weight: 600;
+                transition: transform 0.2s ease, box-shadow 0.2s ease;
+            }
+            button:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 10px 20px rgba(214, 51, 132, 0.3);
+            }
+            .pink-accent { color: #d63384; font-weight: 600; }
+            .savy-logo { font-size: 2.5em; font-weight: 700; color: #1a1a2e; margin-bottom: 5px; }
+            .savy-logo span { color: #d63384; }
+            .demo-credits {
+                margin-top: 20px;
+                padding: 15px;
+                background: #f8f8fa;
+                border-radius: 12px;
+                font-size: 0.85em;
+                color: #666;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="savy-logo">SAV<span>Y</span></div>
+            <p class="subtitle">Sign in to access your tax assessment</p>
+            <form method="POST">
+                <input type="email" name="email" placeholder="Email address" required>
+                <input type="password" name="password" placeholder="Password" required>
+                <button type="submit">Sign In</button>
+            </form>
+            <div class="demo-credits">
+                <strong>Demo Credentials:</strong><br>
+                Email: demo@savyapp.dev<br>
+                Password: demopass123
+            </div>
+        </div>
+    </body>
+    </html>
+    """)
+
+@app.route("/api/auth/email/login", methods=["POST"])
+@safe_route
+def auth_email_login():
+    """
+    Authenticate user with email and password
+    POST /api/auth/email/login
+    Body: { "email": "user@example.com", "password": "password" }
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+        
+        email = data.get("email")
+        password = data.get("password")
+        
+        if not email or not password:
+            return jsonify({"error": "Email and password required"}), 400
+        
+        result = authenticate_savy_user(email, password)
+        
+        if result.get("success"):
+            session["savy_authenticated"] = True
+            session["savy_user_id"] = result.get("user_id")
+            session.modified = True
+            
+            return jsonify({
+                "success": True,
+                "message": "Authentication successful",
+                "token": result.get("token"),
+                "user_id": result.get("user_id"),
+                "data": result.get("data")
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": result.get("error", "Authentication failed")
+            }), 401
+            
+    except Exception as e:
+        logger.error(f"Error in auth_email_login: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/passkey")
 @safe_route
@@ -1323,9 +1957,6 @@ def toggle_sidebar():
     session.modified = True
     return jsonify({"sidebar_open": session["sidebar_open"]})
 
-# =========================================================
-# FIXED EDIT_ANSWER ROUTE - Properly resets the conversation
-# =========================================================
 @app.route("/edit_answer", methods=["POST"])
 @safe_route
 def edit_answer():
@@ -1437,7 +2068,11 @@ def chat():
     if not session.get("passkey_verified"):
         return redirect(url_for("passkey_page"))
     
-    # Initialize refund estimation when chat starts (Step 2)
+    # Check if user is authenticated for Savy API
+    if not session.get("savy_authenticated") and not SAVY_USER_ID:
+        return redirect(url_for("login_page"))
+    
+    # Initialize refund estimation when chat starts
     if not session.get("estimation_initiated") and not session.get("completed"):
         try:
             logger.info("🔄 Initiating refund estimation on chat start...")
@@ -1449,6 +2084,19 @@ def chat():
                 logger.warning(f"⚠️ Failed to initiate refund estimation: {result.get('error')}")
         except Exception as e:
             logger.error(f"Error initiating refund estimation: {e}")
+    
+    # Initialize tax estimation when chat starts (Step 2)
+    if not session.get("tax_estimation_initiated") and not session.get("completed"):
+        try:
+            logger.info("🔄 Initiating tax estimation on chat start...")
+            result = initiate_tax_estimation()
+            if result.get("success"):
+                session["tax_estimation_initiated"] = True
+                logger.info(f"✅ Tax estimation initiated with ID: {session.get('tax_estimation_id')}")
+            else:
+                logger.warning(f"⚠️ Failed to initiate tax estimation: {result.get('error')}")
+        except Exception as e:
+            logger.error(f"Error initiating tax estimation: {e}")
     
     if not session["messages"] and not session["completed"]:
         welcome_msg = "🌅 **Good morning!**\n\n"
@@ -2341,8 +2989,10 @@ def chat():
          waiting_for_answer=session["waiting_for_answer"],
          completed=session["completed"],
          phase=session.get("phase", 1),
+         phase_names=PHASE_NAMES,
          sidebar_open=session.get("sidebar_open", True),
-         answers_list=answers_list)
+         answers_list=answers_list,
+         history=session.get("history", []))
 
 @app.route("/send_message", methods=["POST"])
 @safe_route
@@ -2456,8 +3106,8 @@ def send_message():
     # =========================================================
     # STEP 3: UPDATE REFUND ESTIMATION IN REAL-TIME
     # =========================================================
-    estimation_id = session.get("refund_estimation_id")
-    if estimation_id and session.get("estimation_initiated"):
+    refund_estimation_id = session.get("refund_estimation_id")
+    if refund_estimation_id and session.get("estimation_initiated"):
         try:
             # Prepare answer data for the API
             question_obj = get_question(current_ref)
@@ -2467,7 +3117,7 @@ def send_message():
                 "current_phase": session.get("phase", 1),
                 "progress": {
                     "answered": len(session.get("history", [])),
-                    "total": 15  # Total number of questions
+                    "total": 15
                 },
                 "timestamp": datetime.now().isoformat()
             }
@@ -2483,10 +3133,45 @@ def send_message():
                     "ref": current_ref
                 }
             
-            # Update the estimation in real-time
-            update_refund_estimation(estimation_id, answer_data)
+            # Update the refund estimation in real-time
+            update_refund_estimation(refund_estimation_id, answer_data)
         except Exception as e:
-            logger.error(f"Error updating estimation in real-time: {e}")
+            logger.error(f"Error updating refund estimation in real-time: {e}")
+    
+    # =========================================================
+    # STEP 3: UPDATE TAX ESTIMATION IN REAL-TIME
+    # =========================================================
+    tax_estimation_id = session.get("tax_estimation_id")
+    if tax_estimation_id and session.get("tax_estimation_initiated"):
+        try:
+            # Prepare answer data for the API
+            question_obj = get_question(current_ref)
+            answer_data = {
+                "answers": session.get("answers", {}),
+                "last_answered": current_ref,
+                "current_phase": session.get("phase", 1),
+                "progress": {
+                    "answered": len(session.get("history", [])),
+                    "total": 15
+                },
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Include the specific answer
+            if question_obj:
+                title = question_obj.get("title", current_ref)
+                if callable(title):
+                    title = title(session.get("answers", {}))
+                answer_data["last_answer"] = {
+                    "question": title,
+                    "answer": session["answers"][current_ref],
+                    "ref": current_ref
+                }
+            
+            # Update the tax estimation in real-time
+            update_tax_estimation(tax_estimation_id, answer_data)
+        except Exception as e:
+            logger.error(f"Error updating tax estimation in real-time: {e}")
     
     if result.get("status") == "completed":
         complete_assessment()
@@ -2512,65 +3197,7 @@ def send_message():
     return jsonify({"status": "success", "messages": session["messages"][-1:]})
 
 # =========================================================
-# SAVY API ROUTES
-# =========================================================
-
-@app.route("/api/savy/estimate", methods=["POST"])
-@safe_route
-def savy_estimate():
-    """Send estimation data to Savy API"""
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": "No data provided"}), 400
-        
-        logger.info(f"📊 Sending estimation data to Savy")
-        
-        result = make_savy_request("api/estimations", "POST", data)
-        
-        if result and not result.get("error"):
-            return jsonify({"success": True, "data": result})
-        else:
-            return jsonify({"success": False, "error": result}), 400
-            
-    except Exception as e:
-        logger.error(f"Error in savy_estimate: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/api/savy/user", methods=["GET"])
-@safe_route
-def savy_get_user():
-    """Get user info from Savy API"""
-    try:
-        result = make_savy_request("api/users/me", "GET")
-        
-        if result and not result.get("error"):
-            return jsonify({"success": True, "data": result})
-        else:
-            return jsonify({"success": False, "error": result}), 401
-            
-    except Exception as e:
-        logger.error(f"Error in savy_get_user: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/api/savy/validate", methods=["GET"])
-@safe_route
-def savy_validate_token():
-    """Validate the Savy token"""
-    try:
-        result = make_savy_request("api/users/me", "GET")
-        
-        if result and not result.get("error"):
-            return jsonify({"valid": True, "user": result})
-        else:
-            return jsonify({"valid": False, "error": result})
-            
-    except Exception as e:
-        logger.error(f"Error validating token: {e}")
-        return jsonify({"valid": False, "error": str(e)})
-
-# =========================================================
-# STEP 2: INITIATE REFUND ESTIMATION ROUTE
+# SAVY API ROUTES - REFUND ESTIMATION
 # =========================================================
 
 @app.route("/api/savy/initiate-refund", methods=["POST"])
@@ -2602,13 +3229,9 @@ def initiate_refund():
         logger.error(f"Error in initiate_refund: {e}")
         return jsonify({"error": str(e)}), 500
 
-# =========================================================
-# STEP 3: UPDATE ESTIMATION ROUTE
-# =========================================================
-
-@app.route("/api/savy/update-estimation", methods=["POST"])
+@app.route("/api/savy/update-refund", methods=["POST"])
 @safe_route
-def update_estimation():
+def update_refund():
     """Update the refund estimation with current answers"""
     try:
         data = request.get_json() or {}
@@ -2651,7 +3274,156 @@ def update_estimation():
             return jsonify({"success": False, "error": result.get("error")}), 500
             
     except Exception as e:
+        logger.error(f"Error in update_refund: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# =========================================================
+# SAVY API ROUTES - TAX ESTIMATION
+# =========================================================
+
+@app.route("/api/savy/initiate-estimation", methods=["POST"])
+@safe_route
+def initiate_estimation():
+    """
+    Initiate a tax estimation with user ID and start date
+    POST /api/v1/estimations
+    Body: { "userId": "user_id", "startDate": "2024-01-01" }
+    """
+    try:
+        logger.info("🔄 Initiating tax estimation via API route...")
+        
+        # Check if user is authenticated
+        if not session.get("savy_authenticated") and not SAVY_USER_ID:
+            return jsonify({
+                "success": False,
+                "error": "User not authenticated. Please login first."
+            }), 401
+        
+        result = initiate_tax_estimation()
+        
+        if result.get("success"):
+            return jsonify({
+                "success": True,
+                "message": "Tax estimation initiated successfully",
+                "estimation_id": result.get("estimation_id"),
+                "data": result.get("data")
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": result.get("error", "Failed to initiate tax estimation")
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error in initiate_estimation: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/savy/update-estimation", methods=["POST"])
+@safe_route
+def update_estimation():
+    """
+    Update the tax estimation with current answers
+    PATCH /api/v1/estimations/{id}
+    """
+    try:
+        data = request.get_json() or {}
+        estimation_id = data.get("estimation_id") or session.get("tax_estimation_id")
+        
+        if not estimation_id:
+            return jsonify({"error": "No estimation ID provided"}), 400
+        
+        # Prepare answer data
+        answer_data = {
+            "answers": session.get("answers", {}),
+            "last_answered": session.get("current_ref"),
+            "current_phase": session.get("phase", 1),
+            "progress": {
+                "answered": len(session.get("history", [])),
+                "total": 15
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Include the last answer if available
+        current_ref = session.get("current_ref")
+        if current_ref and current_ref in session.get("answers", {}):
+            question = get_question(current_ref)
+            if question:
+                title = question.get("title", current_ref)
+                if callable(title):
+                    title = title(session.get("answers", {}))
+                answer_data["last_answer"] = {
+                    "question": title,
+                    "answer": session["answers"][current_ref],
+                    "ref": current_ref
+                }
+        
+        result = update_tax_estimation(estimation_id, answer_data)
+        
+        if result.get("success"):
+            return jsonify({"success": True, "data": result.get("data")})
+        else:
+            return jsonify({"success": False, "error": result.get("error")}), 500
+            
+    except Exception as e:
         logger.error(f"Error in update_estimation: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/savy/get-estimation/<estimation_id>", methods=["GET"])
+@safe_route
+def get_estimation(estimation_id):
+    """
+    Get a specific tax estimation by ID
+    GET /api/v1/estimations/{id}
+    """
+    try:
+        result = get_tax_estimation(estimation_id)
+        
+        if result.get("success"):
+            return jsonify({"success": True, "data": result.get("data")})
+        else:
+            return jsonify({"success": False, "error": result.get("error")}), 404
+            
+    except Exception as e:
+        logger.error(f"Error in get_estimation: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/savy/get-all-estimations", methods=["GET"])
+@safe_route
+def get_all_estimations():
+    """
+    Get all tax estimations for the current user
+    GET /api/v1/estimations
+    """
+    try:
+        result = get_all_tax_estimations()
+        
+        if result.get("success"):
+            return jsonify({"success": True, "data": result.get("data")})
+        else:
+            return jsonify({"success": False, "error": result.get("error")}), 400
+            
+    except Exception as e:
+        logger.error(f"Error in get_all_estimations: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/savy/delete-estimation/<estimation_id>", methods=["DELETE"])
+@safe_route
+def delete_estimation(estimation_id):
+    """
+    Delete a tax estimation
+    DELETE /api/v1/estimations/{id}
+    """
+    try:
+        result = delete_tax_estimation(estimation_id)
+        
+        if result.get("success"):
+            return jsonify({"success": True, "data": result.get("data")})
+        else:
+            return jsonify({"success": False, "error": result.get("error")}), 400
+            
+    except Exception as e:
+        logger.error(f"Error in delete_estimation: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route("/restart_chat", methods=["POST"])
@@ -2663,4 +3435,3 @@ def restart_chat():
 
 if __name__ == "__main__":
     app.run(debug=True, threaded=True)
-
