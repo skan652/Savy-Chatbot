@@ -2345,16 +2345,16 @@ def chat():
         }
         
         .message-content-wrapper {
-            max-width: 78%;
+            max-width: 80%;
             display: flex;
             flex-direction: column;
+            min-width: 0;
         }
         
         .message.user .message-content-wrapper {
             align-items: flex-end;
         }
         
-        /* Slightly larger message content */
         .message-content { 
             padding: 12px 18px; 
             border-radius: 18px; 
@@ -2363,6 +2363,8 @@ def chat():
             word-wrap: break-word;
             font-size: 0.92em;
             box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+            max-width: 100%;
+            width: 100%;
         }
         
         .message.user .message-content { 
@@ -2392,42 +2394,33 @@ def chat():
             text-align: right;
         }
         
-        /* Horizontal options */
+        /* Fixed options container - wraps properly */
         .options-container { 
             margin-top: 12px; 
             display: flex; 
-            flex-wrap: nowrap;
-            gap: 10px; 
-            overflow-x: auto;
-            padding: 2px 0 4px 0;
-            -webkit-overflow-scrolling: touch;
+            flex-wrap: wrap;
+            gap: 8px; 
+            padding: 4px 0;
+            width: 100%;
         }
         
-        .options-container::-webkit-scrollbar {
-            height: 3px;
-        }
-        .options-container::-webkit-scrollbar-track {
-            background: #f0f0f0;
-            border-radius: 4px;
-        }
-        .options-container::-webkit-scrollbar-thumb {
-            background: #d63384;
-            border-radius: 4px;
-        }
-        
-        /* Slightly larger option buttons */
+        /* Fixed option buttons - text wraps properly */
         .option-btn { 
             background: white; 
             border: 2px solid #e0e0e0; 
-            padding: 8px 22px; 
+            padding: 8px 16px; 
             border-radius: 24px; 
             cursor: pointer; 
             transition: all 0.25s ease; 
-            font-size: 0.88em; 
+            font-size: 0.85em; 
             color: #444;
             font-weight: 600;
-            white-space: nowrap;
-            flex-shrink: 0;
+            white-space: normal;
+            word-break: break-word;
+            flex: 0 1 auto;
+            max-width: 100%;
+            text-align: center;
+            line-height: 1.4;
         }
         
         .option-btn:hover { 
@@ -2445,6 +2438,48 @@ def chat():
         .option-btn.selected { 
             background: #d63384; 
             color: white; 
+            border-color: #d63384;
+            box-shadow: 0 2px 10px rgba(214, 51, 132, 0.2);
+        }
+        
+        /* Fix for options inside message content */
+        .message-content .options-container {
+            margin-top: 12px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 4px 0;
+            width: 100%;
+        }
+        
+        .message-content .options-container .option-btn {
+            background: white;
+            border: 2px solid #e0e0e0;
+            padding: 8px 16px;
+            border-radius: 24px;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            font-size: 0.85em;
+            color: #444;
+            font-weight: 600;
+            white-space: normal;
+            word-break: break-word;
+            flex: 0 1 auto;
+            max-width: 100%;
+            text-align: center;
+            line-height: 1.4;
+        }
+        
+        .message-content .options-container .option-btn:hover {
+            border-color: #d63384;
+            color: #d63384;
+            transform: translateY(-2px);
+            box-shadow: 0 3px 12px rgba(214, 51, 132, 0.15);
+        }
+        
+        .message-content .options-container .option-btn.selected {
+            background: #d63384;
+            color: white;
             border-color: #d63384;
             box-shadow: 0 2px 10px rgba(214, 51, 132, 0.2);
         }
@@ -2646,7 +2681,7 @@ def chat():
             .messages-container { padding: 12px 14px 10px 14px; }
             .sidebar-logo { padding: 20px 16px; }
             .message-content { font-size: 0.88em; padding: 10px 16px; }
-            .option-btn { padding: 6px 16px; font-size: 0.82em; }
+            .option-btn { padding: 6px 14px; font-size: 0.8em; }
             .answer-item { padding: 10px 12px; }
             .answer-value { font-size: 0.9em; }
             .input-container input { padding: 8px 14px; font-size: 0.85em; }
@@ -2700,12 +2735,11 @@ def chat():
                         <div class="message-content-wrapper">
                             <div class="message-content">
                                 {{ message.content | replace('\\n', '<br>') | safe }}
-                                {% if message.options %}
+                                {% if message.options and message.options|length > 0 %}
                                     <div class="options-container">
                                         {% for option in message.options %}
-                                            {% set display_option = ('✓ Yes' if option == 'Yes' else '✗ No' if option == 'No' else option) %}
                                             <button class="option-btn" onclick="sendMessage('{{ option | replace("'", "\\'") | replace("\\n", " ") }}')">
-                                                {{ display_option | replace('\\n', ' ') }}
+                                                {{ option | replace('\\n', ' ') }}
                                             </button>
                                         {% endfor %}
                                     </div>
@@ -2779,6 +2813,9 @@ def chat():
             let answer = predefinedAnswer || messageInput.value.trim();
             if (!answer && !predefinedAnswer) return;
             
+            // Clean up the answer
+            answer = answer.replace(/\\n/g, ' ').trim();
+            
             const userMsg = document.createElement('div');
             userMsg.className = 'message user';
             userMsg.innerHTML = `
@@ -2823,37 +2860,31 @@ def chat():
                         
                         const msgDiv = document.createElement('div');
                         msgDiv.className = `message ${msg.role}`;
+                        
+                        let contentHtml = msg.content.replace(/\\n/g, '<br>');
+                        
+                        // Handle options if they exist
+                        if (msg.options && msg.options.length > 0) {
+                            let optionsHtml = '<div class="options-container">';
+                            msg.options.forEach(option => {
+                                const cleanOption = option.replace(/\\n/g, ' ');
+                                optionsHtml += `
+                                    <button class="option-btn" onclick="sendMessage('${option.replace(/'/g, "\\'").replace(/\\n/g, ' ')}')">
+                                        ${cleanOption}
+                                    </button>
+                                `;
+                            });
+                            optionsHtml += '</div>';
+                            contentHtml += optionsHtml;
+                        }
+                        
                         msgDiv.innerHTML = `
                             <div class="message-avatar">${msg.role === 'assistant' ? '🤖' : '👤'}</div>
                             <div class="message-content-wrapper">
-                                <div class="message-content">${msg.content.replace(/\\n/g, '<br>')}</div>
+                                <div class="message-content">${contentHtml}</div>
                                 <div class="message-timestamp">${new Date().toLocaleTimeString()}</div>
                             </div>
                         `;
-                        
-                        if (msg.options && msg.options.length > 0) {
-                            const contentDiv = msgDiv.querySelector('.message-content');
-                            const optionsDiv = document.createElement('div');
-                            optionsDiv.className = 'options-container';
-                            msg.options.forEach(option => {
-                                const btn = document.createElement('button');
-                                btn.className = 'option-btn';
-                                let displayText = option.replace(/\\n/g, ' ');
-                                if (displayText === 'Yes') {
-                                    displayText = '✓ Yes';
-                                } else if (displayText === 'No') {
-                                    displayText = '✗ No';
-                                }
-                                btn.textContent = displayText;
-                                btn.onclick = () => {
-                                    optionsDiv.querySelectorAll('.option-btn').forEach(b => b.classList.remove('selected'));
-                                    btn.classList.add('selected');
-                                    sendMessage(option);
-                                };
-                                optionsDiv.appendChild(btn);
-                            });
-                            contentDiv.appendChild(optionsDiv);
-                        }
                         
                         messagesContainer.appendChild(msgDiv);
                         scrollToBottom();
