@@ -3,12 +3,13 @@ from flask import render_template_string
 import json
 import re
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 import inspect
 import os
 import time
 import requests
+import uuid
 
 # Load .env BEFORE importing ai_client to ensure env vars are set
 dotenv_path = os.path.join(os.getcwd(), ".env")
@@ -51,6 +52,146 @@ VALID_PASSKEYS = ["12345", "pass123"]
 # SAVY Brand Color
 SAVY_PINK = "#d63384"
 SAVY_GRADIENT = f"linear-gradient(45deg, {SAVY_PINK}, #a02070)"
+
+# =========================================================
+# CONVERSATION STORAGE
+# =========================================================
+
+# In-memory storage for conversations (in production, use a database)
+conversations = {}
+conversation_folders = {
+    "Today": [],
+    "Yesterday": [],
+    "Previous 7 Days": [],
+    "Older": []
+}
+
+def get_conversation_id():
+    """Generate a unique conversation ID"""
+    return str(uuid.uuid4())[:8]
+
+def save_conversation(conversation_id, messages, answers, history, phase, completed):
+    """Save conversation to storage"""
+    conversations[conversation_id] = {
+        "id": conversation_id,
+        "messages": messages,
+        "answers": answers,
+        "history": history,
+        "phase": phase,
+        "completed": completed,
+        "last_updated": datetime.now().isoformat(),
+        "title": generate_conversation_title(messages, answers),
+        "folder": categorize_conversation()
+    }
+    return conversation_id
+
+def get_conversation(conversation_id):
+    """Get conversation from storage"""
+    return conversations.get(conversation_id)
+
+def get_all_conversations():
+    """Get all conversations organized by folder"""
+    organized = {
+        "Today": [],
+        "Yesterday": [],
+        "Previous 7 Days": [],
+        "Older": []
+    }
+    
+    for conv_id, conv in conversations.items():
+        folder = conv.get("folder", "Older")
+        if folder in organized:
+            organized[folder].append(conv)
+        else:
+            organized["Older"].append(conv)
+    
+    # Sort each folder by last_updated (newest first)
+    for folder in organized:
+        organized[folder].sort(key=lambda x: x.get("last_updated", ""), reverse=True)
+    
+    return organized
+
+def generate_conversation_title(messages, answers=None):
+    """Generate a unique title for the conversation using sequential numbering"""
+    # Count existing conversations to determine the next number
+    conv_count = len(conversations)
+    
+    # Generate title with sequential number
+    title = f"Inquiry #{conv_count + 1}"
+    
+    # Optionally, you can add a short prefix based on the first answer
+    if answers:
+        for ref, answer in answers.items():
+            question = QUESTION_MAP.get(str(ref))
+            if question:
+                title_text = question.get("title", "")
+                if callable(title_text):
+                    try:
+                        title_text = title_text({})
+                    except:
+                        title_text = "Question"
+                
+                # Add a short descriptor based on the question type
+                if title_text and "How much do you earn" in title_text:
+                    answer_str = str(answer).replace('\n', ' ').strip()
+                    if "Under" in answer_str:
+                        return f"Inquiry #{conv_count + 1} - Income: Under £14k"
+                    elif "Between" in answer_str:
+                        return f"Inquiry #{conv_count + 1} - Income: £14k-£50k"
+                    elif "Over" in answer_str:
+                        return f"Inquiry #{conv_count + 1} - Income: Over £50k"
+                elif title_text and "travel for work" in title_text.lower():
+                    answer_str = str(answer).replace('\n', ' ').strip()
+                    return f"Inquiry #{conv_count + 1} - Travel: {answer_str}"
+                elif title_text and "work journeys" in title_text.lower():
+                    answer_str = str(answer).replace('\n', ' ').strip()
+                    if len(answer_str) > 20:
+                        return f"Inquiry #{conv_count + 1} - Work Journeys"
+                    else:
+                        return f"Inquiry #{conv_count + 1} - {answer_str}"
+                elif title_text and "miles" in title_text.lower():
+                    return f"Inquiry #{conv_count + 1} - Mileage: {str(answer).strip()} miles"
+                elif title_text and "earn more than" in title_text.lower():
+                    answer_str = str(answer).replace('\n', ' ').strip()
+                    return f"Inquiry #{conv_count + 1} - Past Income: {answer_str}"
+                elif title_text:
+                    # Use a shortened version of the question
+                    clean_title = title_text.replace('\n', ' ').strip()
+                    if len(clean_title) > 30:
+                        return f"Inquiry #{conv_count + 1} - {clean_title[:27]}..."
+                    else:
+                        return f"Inquiry #{conv_count + 1} - {clean_title}"
+    
+    # If no answers yet, check messages for a meaningful title
+    if messages:
+        for msg in messages:
+            if msg.get("role") == "assistant":
+                content = msg.get("content", "").replace('\n', ' ').strip()
+                if "welcome" not in content.lower() and "good morning" not in content.lower():
+                    if "?" in content:
+                        question_text = content.split("?")[0].strip()
+                        if len(question_text) > 10:
+                            if len(question_text) > 30:
+                                return f"Inquiry #{conv_count + 1} - {question_text[:27]}..."
+                            return f"Inquiry #{conv_count + 1} - {question_text}"
+                    break
+    
+    return title
+
+def categorize_conversation():
+    """Categorize conversation into folders based on date"""
+    now = datetime.now()
+    conv_date = datetime.now()
+    
+    # Check if conversation is from today
+    if conv_date.date() == now.date():
+        return "Today"
+    elif conv_date.date() == (now - timedelta(days=1)).date():
+        return "Yesterday"
+    elif (now - conv_date).days <= 7:
+        return "Previous 7 Days"
+    else:
+        return "Older"
 
 # =========================================================
 # SAVY API INTEGRATION
@@ -869,12 +1010,17 @@ def init_session():
             "estimation_initiated": False,
             "tax_estimation_initiated": False,
             "savy_authenticated": False,
-            "savy_user_id": None
+            "savy_user_id": None,
+            "conversation_id": None
         }
         
         for key, default_value in defaults.items():
             if key not in session:
                 session[key] = default_value
+        
+        # Generate conversation ID if not exists
+        if not session.get("conversation_id"):
+            session["conversation_id"] = get_conversation_id()
         
         session.modified = True
         
@@ -1156,6 +1302,16 @@ def add_message(role, content, options=None, input_type=None):
         
         session["messages"].append(message)
         session.modified = True
+        
+        # Save conversation to storage with updated title
+        save_conversation(
+            session.get("conversation_id"),
+            session.get("messages", []),
+            session.get("answers", {}),
+            session.get("history", []),
+            session.get("phase", 1),
+            session.get("completed", False)
+        )
         
         if len(session["messages"]) > 100:
             session["messages"] = session["messages"][-100:]
@@ -1473,6 +1629,16 @@ def complete_assessment():
         add_message("assistant", final_message)
         session.modified = True
         
+        # Save final conversation with updated title
+        save_conversation(
+            session.get("conversation_id"),
+            session.get("messages", []),
+            session.get("answers", {}),
+            session.get("history", []),
+            session.get("phase", 1),
+            True
+        )
+        
         logger.info(f"✅ Assessment complete and message added to session")
         logger.info(f"{'='*70}\n")
         
@@ -1518,7 +1684,7 @@ def before_request():
     try:
         init_session()
         
-        allowed_routes = ["passkey_page", "verify_passkey", "static", "favicon", "toggle_sidebar", "edit_answer", "login_page", "auth_email_login"]
+        allowed_routes = ["passkey_page", "verify_passkey", "static", "favicon", "toggle_sidebar", "edit_answer", "login_page", "auth_email_login", "get_conversations", "load_conversation", "delete_conversation", "new_conversation", "start_new_assessment"]
         if request.endpoint in allowed_routes:
             return
         
@@ -1541,6 +1707,85 @@ def index():
     if not session.get("passkey_verified"):
         return redirect(url_for("passkey_page"))
     return redirect(url_for("chat"))
+
+# =========================================================
+# START NEW ASSESSMENT - Redirects to passkey page
+# =========================================================
+
+@app.route("/start_new_assessment", methods=["GET"])
+@safe_route
+def start_new_assessment():
+    """Clear session and redirect to passkey page"""
+    session.clear()
+    init_session()
+    return redirect(url_for("passkey_page"))
+
+# =========================================================
+# CONVERSATION MANAGEMENT ROUTES
+# =========================================================
+
+@app.route("/api/conversations", methods=["GET"])
+@safe_route
+def get_conversations():
+    """Get all conversations organized by folder"""
+    organized = get_all_conversations()
+    return jsonify({"success": True, "conversations": organized})
+
+@app.route("/api/conversation/<conversation_id>", methods=["GET"])
+@safe_route
+def load_conversation(conversation_id):
+    """Load a specific conversation"""
+    conv = get_conversation(conversation_id)
+    if conv:
+        # Load conversation data into session
+        session["messages"] = conv.get("messages", [])
+        session["answers"] = conv.get("answers", {})
+        session["history"] = conv.get("history", [])
+        session["phase"] = conv.get("phase", 1)
+        session["completed"] = conv.get("completed", False)
+        session["conversation_id"] = conversation_id
+        session["waiting_for_answer"] = False
+        session.modified = True
+        return jsonify({"success": True, "conversation": conv})
+    return jsonify({"success": False, "error": "Conversation not found"}), 404
+
+@app.route("/api/conversation/<conversation_id>", methods=["DELETE"])
+@safe_route
+def delete_conversation(conversation_id):
+    """Delete a conversation"""
+    if conversation_id in conversations:
+        del conversations[conversation_id]
+        return jsonify({"success": True})
+    return jsonify({"success": False, "error": "Conversation not found"}), 404
+
+@app.route("/api/conversation/new", methods=["POST"])
+@safe_route
+def new_conversation():
+    """Create a new conversation"""
+    # Clear current session data
+    session["messages"] = []
+    session["answers"] = {}
+    session["history"] = []
+    session["phase"] = 1
+    session["completed"] = False
+    session["current_ref"] = "1"
+    session["waiting_for_answer"] = False
+    session["phase_transition_shown"] = False
+    session["conversation_id"] = get_conversation_id()
+    session.modified = True
+    
+    # Add welcome message
+    welcome_msg = "🌅 **Good morning!**\n\n"
+    welcome_msg += "Welcome to the **Tax Assessment Bot**! We'll help you determine your eligibility for tax refunds and identify tax-saving opportunities.\n\n"
+    welcome_msg += "**📋 Phase 1: Refund Assessment** (5-10 questions)\n"
+    welcome_msg += "First, we'll check if you're eligible for a tax refund based on your income and employment.\n\n"
+    welcome_msg += "**💰 Phase 2: Savings Assessment** (5-10 questions)\n"
+    welcome_msg += "Then, we'll calculate potential tax savings based on your travel and business expenses.\n\n"
+    welcome_msg += "Let's get started! 🚀"
+    add_message("assistant", welcome_msg)
+    process_next_question()
+    
+    return jsonify({"success": True, "conversation_id": session["conversation_id"]})
 
 # =========================================================
 # AUTHENTICATION ROUTES
@@ -2062,6 +2307,10 @@ def edit_answer():
         logger.error(f"Error in edit_answer: {e}")
         return jsonify({"status": "error", "message": str(e)})
 
+# =========================================================
+# CHAT ROUTE
+# =========================================================
+
 @app.route("/chat")
 @safe_route
 def chat():
@@ -2124,6 +2373,9 @@ def chat():
                     "answer": format_answer_for_display(question, session["answers"][ref])
                 })
     
+    # Get all conversations for the sidebar
+    all_conversations = get_all_conversations()
+    
     return render_template_string("""
 <!DOCTYPE html>
 <html lang="en">
@@ -2146,7 +2398,7 @@ def chat():
         }
         
         .sidebar {
-            width: 320px;
+            width: 260px;
             background: white;
             border-right: 1px solid #e0e0e0;
             display: flex;
@@ -2155,42 +2407,142 @@ def chat():
             z-index: 10;
             overflow-y: auto;
             transition: width 0.3s ease;
+            flex-shrink: 0;
         }
         
         .sidebar-logo {
-            padding: 28px 24px 20px 24px;
+            padding: 20px 16px 16px 16px;
             text-align: center;
             border-bottom: 1px solid #f0f0f0;
             background: white;
             display: flex;
-            justify-content: center;
+            flex-direction: column;
             align-items: center;
+            gap: 12px;
         }
         
         .savy-logo-sidebar {
-            width: 150px;
-            height: auto;
-            display: block;
+            height: 32px;
+            width: auto;
         }
         
-        .sidebar-header {
-            padding: 16px 24px;
-            background: linear-gradient(135deg, #d63384, #b02a6e);
+        .new-chat-btn {
+            background: #d63384;
             color: white;
+            border: none;
+            border-radius: 20px;
+            padding: 8px 20px;
+            font-size: 0.8em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            white-space: nowrap;
+            width: 100%;
+            max-width: 180px;
+        }
+        
+        .new-chat-btn:hover {
+            background: #b02a6e;
+            transform: scale(1.02);
+        }
+        
+        .sidebar-nav {
+            padding: 12px 12px;
+            border-bottom: 1px solid #f0f0f0;
+            display: flex;
+            justify-content: center;
+        }
+        
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: #555;
+            font-size: 0.85em;
+            font-weight: 500;
+            justify-content: center;
+            width: 100%;
+            max-width: 180px;
+        }
+        
+        .nav-item:hover {
+            background: #f5f5f7;
+        }
+        
+        .nav-item.active {
+            background: #f0f0f4;
+            color: #d63384;
+        }
+        
+        .nav-icon {
+            font-size: 1em;
+            width: 20px;
             text-align: center;
         }
         
-        .sidebar-header h3 {
-            font-size: 1em;
-            font-weight: 700;
-            margin-bottom: 3px;
-            letter-spacing: 0.3px;
+        .sidebar-recent {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px 12px;
         }
         
-        .sidebar-header p {
-            font-size: 0.75em;
-            opacity: 0.9;
-            font-weight: 400;
+        .recent-label {
+            font-size: 0.65em;
+            text-transform: uppercase;
+            color: #999;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            padding: 12px 8px 6px 8px;
+        }
+        
+        .conversation-item {
+            padding: 8px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 0.82em;
+            color: #444;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .conversation-item:hover {
+            background: #f5f5f7;
+        }
+        
+        .conversation-item.active {
+            background: #f0f0f4;
+            color: #d63384;
+        }
+        
+        .conversation-title {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .conversation-delete {
+            opacity: 0;
+            color: #ccc;
+            cursor: pointer;
+            font-size: 0.8em;
+            padding: 0 4px;
+            transition: all 0.2s ease;
+        }
+        
+        .conversation-item:hover .conversation-delete {
+            opacity: 1;
+        }
+        
+        .conversation-delete:hover {
+            color: #d63384;
         }
         
         .answers-list {
@@ -2281,6 +2633,7 @@ def chat():
             flex-direction: column;
             background: #fafafa;
             position: relative;
+            min-width: 0;
         }
         
         .messages-container { 
@@ -2394,7 +2747,6 @@ def chat():
             text-align: right;
         }
         
-        /* Fixed options container - wraps properly */
         .options-container { 
             margin-top: 12px; 
             display: flex; 
@@ -2404,7 +2756,6 @@ def chat():
             width: 100%;
         }
         
-        /* Fixed option buttons - text wraps properly */
         .option-btn { 
             background: white; 
             border: 2px solid #e0e0e0; 
@@ -2442,7 +2793,6 @@ def chat():
             box-shadow: 0 2px 10px rgba(214, 51, 132, 0.2);
         }
         
-        /* Fix for options inside message content */
         .message-content .options-container {
             margin-top: 12px;
             display: flex;
@@ -2630,20 +2980,24 @@ def chat():
         }
         
         .answers-list::-webkit-scrollbar,
-        .messages-container::-webkit-scrollbar {
+        .messages-container::-webkit-scrollbar,
+        .sidebar-recent::-webkit-scrollbar {
             width: 4px;
         }
         .answers-list::-webkit-scrollbar-track,
-        .messages-container::-webkit-scrollbar-track {
+        .messages-container::-webkit-scrollbar-track,
+        .sidebar-recent::-webkit-scrollbar-track {
             background: transparent;
         }
         .answers-list::-webkit-scrollbar-thumb,
-        .messages-container::-webkit-scrollbar-thumb {
+        .messages-container::-webkit-scrollbar-thumb,
+        .sidebar-recent::-webkit-scrollbar-thumb {
             background: #ddd;
             border-radius: 4px;
         }
         .answers-list::-webkit-scrollbar-thumb:hover,
-        .messages-container::-webkit-scrollbar-thumb:hover {
+        .messages-container::-webkit-scrollbar-thumb:hover,
+        .sidebar-recent::-webkit-scrollbar-thumb:hover {
             background: #d63384;
         }
         
@@ -2676,10 +3030,10 @@ def chat():
         @media (max-width: 768px) { 
             .message-content-wrapper { max-width: 85%; } 
             .input-container { padding: 10px 14px; }
-            .sidebar { width: 280px; }
-            .savy-logo-sidebar { width: 120px; }
+            .sidebar { width: 200px; }
+            .savy-logo-sidebar { height: 24px; }
             .messages-container { padding: 12px 14px 10px 14px; }
-            .sidebar-logo { padding: 20px 16px; }
+            .sidebar-logo { padding: 12px 12px; }
             .message-content { font-size: 0.88em; padding: 10px 16px; }
             .option-btn { padding: 6px 14px; font-size: 0.8em; }
             .answer-item { padding: 10px 12px; }
@@ -2687,6 +3041,9 @@ def chat():
             .input-container input { padding: 8px 14px; font-size: 0.85em; }
             .input-container button { padding: 8px 18px; font-size: 0.82em; }
             .message-avatar { width: 28px; height: 28px; font-size: 12px; }
+            .conversation-item { font-size: 0.75em; padding: 6px 10px; }
+            .nav-item { font-size: 0.75em; padding: 6px 10px; }
+            .new-chat-btn { font-size: 0.65em; padding: 4px 10px; }
         }
     </style>
 </head>
@@ -2698,30 +3055,28 @@ def chat():
                     <text x="50%" y="42" text-anchor="middle" font-family="Arial, sans-serif" font-size="42" font-weight="bold" fill="#1a1a2e">SAVY</text>
                     <circle cx="50%" cy="12" r="7" fill="#d63384"/>
                 </svg>
+                <button class="new-chat-btn" onclick="window.location.href='/start_new_assessment'">+ New Chat</button>
             </div>
             
-            <div class="sidebar-header">
-                <h3>📋 Your Answers</h3>
-                <p>Tap any answer to edit</p>
+            <div class="sidebar-nav">
+                <div class="nav-item active">
+                    <span class="nav-icon">💬</span>
+                    <span>Chat</span>
+                </div>
             </div>
-            <div class="answers-list" id="answers-list">
-                {% if answers_list %}
-                    {% for answer in answers_list %}
-                        <div class="answer-item" onclick="editAnswer('{{ answer.ref }}')">
-                            <div class="answer-question">
-                                <span class="answer-number">{{ loop.index }}</span>
-                                {{ answer.title }}
-                                <span class="edit-icon">✏️</span>
-                            </div>
-                            <div class="answer-value">{{ answer.answer }}</div>
-                        </div>
-                    {% endfor %}
-                {% else %}
-                    <div class="no-answers">
-                        <span class="no-answers-icon">💬</span>
-                        No answers yet<br>Start answering questions to see them here
-                    </div>
-                {% endif %}
+            
+            <div class="sidebar-recent" id="sidebar-recent">
+                <div class="recent-label">📁 Recent</div>
+                <div id="conversation-list">
+                    <!-- Conversations will be loaded here -->
+                </div>
+            </div>
+            
+            <div style="border-top: 1px solid #f0f0f0; padding: 12px 16px;">
+                <div style="display: flex; align-items: center; gap: 10px; font-size: 0.75em; color: #999;">
+                    <span>👤</span>
+                    <span>User</span>
+                </div>
             </div>
         </div>
         
@@ -2755,23 +3110,14 @@ def chat():
                 {% endfor %}
             </div>
             
-            {% if not completed and messages|length > 1 %}
-            <div class="chat-progress">
-                <span>{{ phase_names[phase] if phase in phase_names else 'Assessment' }}</span>
-                <div class="chat-progress-bar">
-                    <div class="chat-progress-bar-fill" style="width: {{ ((history|length) / 15 * 100)|round }}%;"></div>
-                </div>
-            </div>
-            {% endif %}
-            
-            <div class="input-container">
-                <input type="text" id="message-input" placeholder="Type your answer here..." autocomplete="off">
-                <button onclick="sendMessage()" id="send-btn">Send →</button>
+            <div class="input-container" style="{% if completed %}border-top: none;{% endif %}">
+                <input type="text" id="message-input" placeholder="Type your answer here..." autocomplete="off" {% if completed %}disabled{% endif %}>
+                <button onclick="sendMessage()" id="send-btn" {% if completed %}disabled{% endif %}>Send →</button>
             </div>
             
             {% if completed %}
                 <div class="input-container" style="border-top: none; padding-top: 0;">
-                    <button onclick="restartChat()" class="restart-btn">🔄 Start New Assessment</button>
+                    <button onclick="window.location.href='/start_new_assessment'" class="restart-btn">🔄 Start New Assessment</button>
                 </div>
             {% endif %}
         </div>
@@ -2788,6 +3134,77 @@ def chat():
         }
         
         setTimeout(scrollToBottom, 100);
+        
+        // Load conversations
+        function loadConversations() {
+            fetch('/api/conversations')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        renderConversations(data.conversations);
+                    }
+                })
+                .catch(error => console.error('Error loading conversations:', error));
+        }
+        
+        function renderConversations(conversations) {
+            const container = document.getElementById('conversation-list');
+            let html = '';
+            
+            const folderOrder = ['Today', 'Yesterday', 'Previous 7 Days', 'Older'];
+            
+            for (const folder of folderOrder) {
+                const convs = conversations[folder] || [];
+                if (convs.length > 0) {
+                    html += `<div class="recent-label">${folder}</div>`;
+                    for (const conv of convs) {
+                        const isActive = conv.id === '{{ conversation_id }}';
+                        // Use the conversation title or fallback
+                        const title = conv.title || 'New Conversation';
+                        html += `
+                            <div class="conversation-item ${isActive ? 'active' : ''}" onclick="loadConversation('${conv.id}')">
+                                <span class="conversation-title">${title}</span>
+                                <span class="conversation-delete" onclick="event.stopPropagation(); deleteConversation('${conv.id}')">✕</span>
+                            </div>
+                        `;
+                    }
+                }
+            }
+            
+            if (!html) {
+                html = `<div style="text-align: center; color: #bbb; padding: 20px; font-size: 0.8em;">No conversations yet</div>`;
+            }
+            
+            container.innerHTML = html;
+        }
+        
+        function loadConversation(conversationId) {
+            fetch(`/api/conversation/${conversationId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        window.location.reload();
+                    }
+                })
+                .catch(error => console.error('Error loading conversation:', error));
+        }
+        
+        function deleteConversation(conversationId) {
+            if (confirm('Delete this conversation?')) {
+                fetch(`/api/conversation/${conversationId}`, { method: 'DELETE' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            loadConversations();
+                            const currentConv = '{{ conversation_id }}';
+                            if (currentConv === conversationId) {
+                                window.location.href = '/chat';
+                            }
+                        }
+                    })
+                    .catch(error => console.error('Error deleting conversation:', error));
+            }
+        }
         
         function editAnswer(ref) {
             if (confirm('Edit this answer? This will reset all answers after this question.')) {
@@ -2813,7 +3230,6 @@ def chat():
             let answer = predefinedAnswer || messageInput.value.trim();
             if (!answer && !predefinedAnswer) return;
             
-            // Clean up the answer
             answer = answer.replace(/\\n/g, ' ').trim();
             
             const userMsg = document.createElement('div');
@@ -2863,7 +3279,6 @@ def chat():
                         
                         let contentHtml = msg.content.replace(/\\n/g, '<br>');
                         
-                        // Handle options if they exist
                         if (msg.options && msg.options.length > 0) {
                             let optionsHtml = '<div class="options-container">';
                             msg.options.forEach(option => {
@@ -3001,10 +3416,6 @@ def chat():
             if (enabled) messageInput.focus();
         }
         
-        function restartChat() { 
-            fetch('/restart_chat', {method: 'POST'}).then(() => window.location.reload()); 
-        }
-        
         messageInput.addEventListener('keypress', function(e) { 
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -3013,6 +3424,9 @@ def chat():
         });
         
         setTimeout(() => messageInput.focus(), 300);
+        
+        // Load conversations on page load
+        loadConversations();
     </script>
 </body>
 </html>
@@ -3023,7 +3437,12 @@ def chat():
          phase_names=PHASE_NAMES,
          sidebar_open=session.get("sidebar_open", True),
          answers_list=answers_list,
-         history=session.get("history", []))
+         history=session.get("history", []),
+         conversation_id=session.get("conversation_id"))
+
+# =========================================================
+# SEND MESSAGE ROUTE
+# =========================================================
 
 @app.route("/send_message", methods=["POST"])
 @safe_route
@@ -3116,7 +3535,6 @@ def send_message():
     proposal_questions = handle_proposal(current_ref, answer)
     if proposal_questions:
         session["answers"][current_ref] = answer
-        # Only add to history if not already there (not editing)
         if current_ref not in session["history"]:
             session["history"].append(current_ref)
         session["waiting_for_answer"] = False
@@ -3125,22 +3543,17 @@ def send_message():
     
     result = process_handler_next(current_ref, answer)
     
-    # Save answer - if editing, overwrite existing
     session["answers"][current_ref] = answer
-    # Only add to history if not already there (not editing)
     if current_ref not in session["history"]:
         session["history"].append(current_ref)
     session["waiting_for_answer"] = False
     
     run_xhr_params(question, answer, current_ref)
     
-    # =========================================================
-    # STEP 3: UPDATE REFUND ESTIMATION IN REAL-TIME
-    # =========================================================
+    # Update refund estimation
     refund_estimation_id = session.get("refund_estimation_id")
     if refund_estimation_id and session.get("estimation_initiated"):
         try:
-            # Prepare answer data for the API
             question_obj = get_question(current_ref)
             answer_data = {
                 "answers": session.get("answers", {}),
@@ -3153,7 +3566,6 @@ def send_message():
                 "timestamp": datetime.now().isoformat()
             }
             
-            # Include the specific answer
             if question_obj:
                 title = question_obj.get("title", current_ref)
                 if callable(title):
@@ -3164,18 +3576,14 @@ def send_message():
                     "ref": current_ref
                 }
             
-            # Update the refund estimation in real-time
             update_refund_estimation(refund_estimation_id, answer_data)
         except Exception as e:
             logger.error(f"Error updating refund estimation in real-time: {e}")
     
-    # =========================================================
-    # STEP 3: UPDATE TAX ESTIMATION IN REAL-TIME
-    # =========================================================
+    # Update tax estimation
     tax_estimation_id = session.get("tax_estimation_id")
     if tax_estimation_id and session.get("tax_estimation_initiated"):
         try:
-            # Prepare answer data for the API
             question_obj = get_question(current_ref)
             answer_data = {
                 "answers": session.get("answers", {}),
@@ -3188,7 +3596,6 @@ def send_message():
                 "timestamp": datetime.now().isoformat()
             }
             
-            # Include the specific answer
             if question_obj:
                 title = question_obj.get("title", current_ref)
                 if callable(title):
@@ -3199,7 +3606,6 @@ def send_message():
                     "ref": current_ref
                 }
             
-            # Update the tax estimation in real-time
             update_tax_estimation(tax_estimation_id, answer_data)
         except Exception as e:
             logger.error(f"Error updating tax estimation in real-time: {e}")
@@ -3234,15 +3640,8 @@ def send_message():
 @app.route("/api/savy/initiate-refund", methods=["POST"])
 @safe_route
 def initiate_refund():
-    """
-    Initiate a refund estimation with empty body
-    POST /api/v1/refund-estimations
-    """
     try:
-        logger.info("🔄 Initiating refund estimation via API route...")
-        
         result = initiate_refund_estimation()
-        
         if result.get("success"):
             return jsonify({
                 "success": True,
@@ -3255,7 +3654,6 @@ def initiate_refund():
                 "success": False,
                 "error": result.get("error", "Failed to initiate refund estimation")
             }), 500
-            
     except Exception as e:
         logger.error(f"Error in initiate_refund: {e}")
         return jsonify({"error": str(e)}), 500
@@ -3263,7 +3661,6 @@ def initiate_refund():
 @app.route("/api/savy/update-refund", methods=["POST"])
 @safe_route
 def update_refund():
-    """Update the refund estimation with current answers"""
     try:
         data = request.get_json() or {}
         estimation_id = data.get("estimation_id") or session.get("refund_estimation_id")
@@ -3271,7 +3668,6 @@ def update_refund():
         if not estimation_id:
             return jsonify({"error": "No estimation ID provided"}), 400
         
-        # Prepare answer data
         answer_data = {
             "answers": session.get("answers", {}),
             "last_answered": session.get("current_ref"),
@@ -3283,7 +3679,6 @@ def update_refund():
             "timestamp": datetime.now().isoformat()
         }
         
-        # Include the last answer if available
         current_ref = session.get("current_ref")
         if current_ref and current_ref in session.get("answers", {}):
             question = get_question(current_ref)
@@ -3303,7 +3698,6 @@ def update_refund():
             return jsonify({"success": True, "data": result.get("data")})
         else:
             return jsonify({"success": False, "error": result.get("error")}), 500
-            
     except Exception as e:
         logger.error(f"Error in update_refund: {e}")
         return jsonify({"error": str(e)}), 500
@@ -3315,15 +3709,7 @@ def update_refund():
 @app.route("/api/savy/initiate-estimation", methods=["POST"])
 @safe_route
 def initiate_estimation():
-    """
-    Initiate a tax estimation with user ID and start date
-    POST /api/v1/estimations
-    Body: { "userId": "user_id", "startDate": "2024-01-01" }
-    """
     try:
-        logger.info("🔄 Initiating tax estimation via API route...")
-        
-        # Check if user is authenticated
         if not session.get("savy_authenticated") and not SAVY_USER_ID:
             return jsonify({
                 "success": False,
@@ -3344,7 +3730,6 @@ def initiate_estimation():
                 "success": False,
                 "error": result.get("error", "Failed to initiate tax estimation")
             }), 500
-            
     except Exception as e:
         logger.error(f"Error in initiate_estimation: {e}")
         return jsonify({"error": str(e)}), 500
@@ -3352,10 +3737,6 @@ def initiate_estimation():
 @app.route("/api/savy/update-estimation", methods=["POST"])
 @safe_route
 def update_estimation():
-    """
-    Update the tax estimation with current answers
-    PATCH /api/v1/estimations/{id}
-    """
     try:
         data = request.get_json() or {}
         estimation_id = data.get("estimation_id") or session.get("tax_estimation_id")
@@ -3363,7 +3744,6 @@ def update_estimation():
         if not estimation_id:
             return jsonify({"error": "No estimation ID provided"}), 400
         
-        # Prepare answer data
         answer_data = {
             "answers": session.get("answers", {}),
             "last_answered": session.get("current_ref"),
@@ -3375,7 +3755,6 @@ def update_estimation():
             "timestamp": datetime.now().isoformat()
         }
         
-        # Include the last answer if available
         current_ref = session.get("current_ref")
         if current_ref and current_ref in session.get("answers", {}):
             question = get_question(current_ref)
@@ -3395,7 +3774,6 @@ def update_estimation():
             return jsonify({"success": True, "data": result.get("data")})
         else:
             return jsonify({"success": False, "error": result.get("error")}), 500
-            
     except Exception as e:
         logger.error(f"Error in update_estimation: {e}")
         return jsonify({"error": str(e)}), 500
@@ -3403,10 +3781,6 @@ def update_estimation():
 @app.route("/api/savy/get-estimation/<estimation_id>", methods=["GET"])
 @safe_route
 def get_estimation(estimation_id):
-    """
-    Get a specific tax estimation by ID
-    GET /api/v1/estimations/{id}
-    """
     try:
         result = get_tax_estimation(estimation_id)
         
@@ -3414,7 +3788,6 @@ def get_estimation(estimation_id):
             return jsonify({"success": True, "data": result.get("data")})
         else:
             return jsonify({"success": False, "error": result.get("error")}), 404
-            
     except Exception as e:
         logger.error(f"Error in get_estimation: {e}")
         return jsonify({"error": str(e)}), 500
@@ -3422,10 +3795,6 @@ def get_estimation(estimation_id):
 @app.route("/api/savy/get-all-estimations", methods=["GET"])
 @safe_route
 def get_all_estimations():
-    """
-    Get all tax estimations for the current user
-    GET /api/v1/estimations
-    """
     try:
         result = get_all_tax_estimations()
         
@@ -3433,7 +3802,6 @@ def get_all_estimations():
             return jsonify({"success": True, "data": result.get("data")})
         else:
             return jsonify({"success": False, "error": result.get("error")}), 400
-            
     except Exception as e:
         logger.error(f"Error in get_all_estimations: {e}")
         return jsonify({"error": str(e)}), 500
@@ -3441,10 +3809,6 @@ def get_all_estimations():
 @app.route("/api/savy/delete-estimation/<estimation_id>", methods=["DELETE"])
 @safe_route
 def delete_estimation(estimation_id):
-    """
-    Delete a tax estimation
-    DELETE /api/v1/estimations/{id}
-    """
     try:
         result = delete_tax_estimation(estimation_id)
         
@@ -3452,7 +3816,6 @@ def delete_estimation(estimation_id):
             return jsonify({"success": True, "data": result.get("data")})
         else:
             return jsonify({"success": False, "error": result.get("error")}), 400
-            
     except Exception as e:
         logger.error(f"Error in delete_estimation: {e}")
         return jsonify({"error": str(e)}), 500
