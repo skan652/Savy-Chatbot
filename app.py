@@ -1000,6 +1000,8 @@ def init_session():
             "pending_proposal": None,
             "phase": 1,
             "phase_transition_shown": False,
+            "awaiting_greeting": False,
+            "awaiting_greeting_ack": False,
             "last_activity": datetime.now().isoformat(),
             "error_count": 0,
             "estimation_data": {},
@@ -1771,20 +1773,13 @@ def new_conversation():
     session["current_ref"] = "1"
     session["waiting_for_answer"] = False
     session["phase_transition_shown"] = False
+    session["awaiting_greeting"] = True
+    session["awaiting_greeting_ack"] = False
     session["conversation_id"] = get_conversation_id()
     session.modified = True
     
-    # Add welcome message
-    welcome_msg = "🌅 **Good morning!**\n\n"
-    welcome_msg += "Welcome to the **Tax Assessment Bot**! We'll help you determine your eligibility for tax refunds and identify tax-saving opportunities.\n\n"
-    welcome_msg += "**📋 Phase 1: Refund Assessment** (5-10 questions)\n"
-    welcome_msg += "First, we'll check if you're eligible for a tax refund based on your income and employment.\n\n"
-    welcome_msg += "**💰 Phase 2: Savings Assessment** (5-10 questions)\n"
-    welcome_msg += "Then, we'll calculate potential tax savings based on your travel and business expenses.\n\n"
-    welcome_msg += "Let's get started! 🚀"
-    add_message("assistant", welcome_msg)
-    process_next_question()
-    
+    # Wait for user greeting before showing welcome and starting questions
+    # The chat page will render an empty conversation until the user says Hello or Hi.
     return jsonify({"success": True, "conversation_id": session["conversation_id"]})
 
 # =========================================================
@@ -2347,16 +2342,10 @@ def chat():
         except Exception as e:
             logger.error(f"Error initiating tax estimation: {e}")
     
-    if not session["messages"] and not session["completed"]:
-        welcome_msg = "🌅 **Good morning!**\n\n"
-        welcome_msg += "Welcome to the **Tax Assessment Bot**! We'll help you determine your eligibility for tax refunds and identify tax-saving opportunities.\n\n"
-        welcome_msg += "**📋 Phase 1: Refund Assessment** (5-10 questions)\n"
-        welcome_msg += "First, we'll check if you're eligible for a tax refund based on your income and employment.\n\n"
-        welcome_msg += "**💰 Phase 2: Savings Assessment** (5-10 questions)\n"
-        welcome_msg += "Then, we'll calculate potential tax savings based on your travel and business expenses.\n\n"
-        welcome_msg += "Let's get started! 🚀"
-        add_message("assistant", welcome_msg)
-        process_next_question()
+    # Do not show the welcome message automatically; wait for the user to say Hello or Hi first.
+    if not session.get("messages") and not session.get("completed"):
+        session["awaiting_greeting"] = True
+        session["awaiting_greeting_ack"] = False
     
     # Prepare answers for sidebar
     answers_list = []
@@ -3313,8 +3302,6 @@ def chat():
                         removeAIProcessingMessage();
                     }
                     setTimeout(() => window.location.reload(), 1000);
-                } else {
-                    setTimeout(() => window.location.reload(), 500);
                 }
             } catch (error) { 
                 console.error('Error:', error); 
@@ -3450,9 +3437,6 @@ def send_message():
     if session.get("completed"):
         return jsonify({"status": "completed"})
     
-    if not session.get("waiting_for_answer"):
-        return jsonify({"status": "error", "message": "Not waiting for answer"})
-    
     data = request.get_json()
     if not data:
         return jsonify({"status": "error", "message": "Invalid request"})
@@ -3460,6 +3444,36 @@ def send_message():
     answer = data.get("answer", "").strip()
     if not answer:
         return jsonify({"status": "error", "message": "Please provide an answer"})
+    
+    # First user interaction must be a greeting before starting the assessment
+    if session.get("awaiting_greeting"):
+        normalized_answer = answer.lower().replace("!", "").strip()
+        if normalized_answer in ["hello", "hi", "hey", "hello there", "hi there", "hey there"]:
+            welcome_msg = "🌅 **Good morning!**\n\n"
+            welcome_msg += "Welcome to the **Tax Assessment Bot**! We'll help you determine your eligibility for tax refunds and identify tax-saving opportunities.\n\n"
+            welcome_msg += "**📋 Phase 1: Refund Assessment** (5-10 questions)\n"
+            welcome_msg += "First, we'll check if you're eligible for a tax refund based on your income and employment.\n\n"
+            welcome_msg += "**💰 Phase 2: Savings Assessment** (5-10 questions)\n"
+            welcome_msg += "Then, we'll calculate potential tax savings based on your travel and business expenses.\n\n"
+            welcome_msg += "When you're ready, type **OK** to continue."
+            add_message("assistant", welcome_msg)
+            session["awaiting_greeting"] = False
+            session["awaiting_greeting_ack"] = True
+            return jsonify({"status": "success", "messages": session["messages"][-1:]})
+        add_message("assistant", "Please say **Hello** or **Hi** to begin the assessment.")
+        return jsonify({"status": "error", "messages": [session["messages"][-1]]})
+    
+    if session.get("awaiting_greeting_ack"):
+        normalized_answer = answer.lower().replace("!", "").strip()
+        if normalized_answer in ["ok", "okay", "sure", "ready", "yes"]:
+            session["awaiting_greeting_ack"] = False
+            process_next_question()
+            return jsonify({"status": "success", "messages": session["messages"][-1:]})
+        add_message("assistant", "Please type **OK** when you're ready to continue.")
+        return jsonify({"status": "error", "messages": [session["messages"][-1]]})
+    
+    if not session.get("waiting_for_answer"):
+        return jsonify({"status": "error", "message": "Not waiting for answer"})
     
     # Handle proposal flow
     if session.get("pending_proposal"):
