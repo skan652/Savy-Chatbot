@@ -113,13 +113,9 @@ def get_all_conversations():
 
 def generate_conversation_title(messages, answers=None):
     """Generate a unique title for the conversation using sequential numbering"""
-    # Count existing conversations to determine the next number
     conv_count = len(conversations)
-    
-    # Generate title with sequential number
     title = f"Inquiry #{conv_count + 1}"
     
-    # Optionally, you can add a short prefix based on the first answer
     if answers:
         for ref, answer in answers.items():
             question = QUESTION_MAP.get(str(ref))
@@ -131,7 +127,6 @@ def generate_conversation_title(messages, answers=None):
                     except:
                         title_text = "Question"
                 
-                # Add a short descriptor based on the question type
                 if title_text and "How much do you earn" in title_text:
                     answer_str = str(answer).replace('\n', ' ').strip()
                     if "Under" in answer_str:
@@ -155,14 +150,12 @@ def generate_conversation_title(messages, answers=None):
                     answer_str = str(answer).replace('\n', ' ').strip()
                     return f"Inquiry #{conv_count + 1} - Past Income: {answer_str}"
                 elif title_text:
-                    # Use a shortened version of the question
                     clean_title = title_text.replace('\n', ' ').strip()
                     if len(clean_title) > 30:
                         return f"Inquiry #{conv_count + 1} - {clean_title[:27]}..."
                     else:
                         return f"Inquiry #{conv_count + 1} - {clean_title}"
     
-    # If no answers yet, check messages for a meaningful title
     if messages:
         for msg in messages:
             if msg.get("role") == "assistant":
@@ -183,7 +176,6 @@ def categorize_conversation():
     now = datetime.now()
     conv_date = datetime.now()
     
-    # Check if conversation is from today
     if conv_date.date() == now.date():
         return "Today"
     elif conv_date.date() == (now - timedelta(days=1)).date():
@@ -271,20 +263,16 @@ def authenticate_savy_user(email, password):
             "password": password
         }
         
-        # Use the correct email login endpoint
         response = make_savy_request("api/v1/auth/email/login", "POST", login_data)
         
         if response and not response.get("error"):
-            # Extract token and user ID from response
             token = response.get("token") or response.get("accessToken") or response.get("access_token")
             user_id = response.get("userId") or response.get("user") and response.get("user").get("id") or response.get("id")
             
             if token:
-                # Save token to .env file
                 env_path = os.path.join(os.getcwd(), ".env")
                 env_vars = {}
                 
-                # Read existing .env
                 if os.path.exists(env_path):
                     with open(env_path, "r", encoding="utf-8") as f:
                         for line in f:
@@ -292,22 +280,18 @@ def authenticate_savy_user(email, password):
                                 key, value = line.split("=", 1)
                                 env_vars[key.strip()] = value.strip().strip('"').strip("'")
                 
-                # Update with new values
                 env_vars["SAVY_TOKEN"] = token
                 if user_id:
                     env_vars["SAVY_USER_ID"] = str(user_id)
                 
-                # Write back to .env
                 with open(env_path, "w", encoding="utf-8") as f:
                     for key, value in env_vars.items():
                         f.write(f'{key}="{value}"\n')
                 
-                # Update current environment
                 os.environ["SAVY_TOKEN"] = token
                 if user_id:
                     os.environ["SAVY_USER_ID"] = str(user_id)
                 
-                # Update global variables
                 global SAVY_TOKEN, SAVY_USER_ID
                 SAVY_TOKEN = token
                 SAVY_USER_ID = str(user_id) if user_id else None
@@ -352,14 +336,12 @@ def initiate_refund_estimation():
     try:
         logger.info("🔄 Initiating refund estimation with Savy API...")
         
-        # Make POST request with empty body
         response = make_savy_request("api/v1/refund-estimations", "POST", {})
         
         if response and not response.get("error"):
             estimation_id = response.get("id") or response.get("estimationId") or response.get("_id")
             logger.info(f"✅ Refund estimation initiated successfully! ID: {estimation_id}")
             
-            # Store the estimation ID in session
             if estimation_id:
                 session["refund_estimation_id"] = estimation_id
                 session.modified = True
@@ -395,7 +377,6 @@ def update_refund_estimation(estimation_id, answer_data):
         
         logger.info(f"🔄 Updating refund estimation {estimation_id} with answer data...")
         
-        # Make PATCH request with the answer data
         response = make_savy_request(f"api/v1/refund-estimations/{estimation_id}", "PATCH", answer_data)
         
         if response and not response.get("error"):
@@ -432,7 +413,6 @@ def initiate_tax_estimation():
     try:
         logger.info("🔄 Initiating tax estimation with Savy API...")
         
-        # Get user ID from environment or session
         user_id = SAVY_USER_ID or session.get("savy_user_id")
         
         if not user_id:
@@ -442,7 +422,6 @@ def initiate_tax_estimation():
                 "error": "No user ID available. Please authenticate first."
             }
         
-        # Prepare request body with userId and startDate
         estimation_data = {
             "userId": user_id,
             "startDate": datetime.now().strftime("%Y-%m-%d")
@@ -450,14 +429,12 @@ def initiate_tax_estimation():
         
         logger.info(f"📦 Estimation data: {json.dumps(estimation_data, indent=2)}")
         
-        # Make POST request with userId and startDate
         response = make_savy_request("api/v1/estimations", "POST", estimation_data)
         
         if response and not response.get("error"):
             estimation_id = response.get("id") or response.get("estimationId") or response.get("_id")
             logger.info(f"✅ Tax estimation initiated successfully! ID: {estimation_id}")
             
-            # Store the estimation ID in session
             if estimation_id:
                 session["tax_estimation_id"] = estimation_id
                 session.modified = True
@@ -493,7 +470,6 @@ def update_tax_estimation(estimation_id, answer_data):
         
         logger.info(f"🔄 Updating tax estimation {estimation_id} with answer data...")
         
-        # Make PATCH request with the answer data
         response = make_savy_request(f"api/v1/estimations/{estimation_id}", "PATCH", answer_data)
         
         if response and not response.get("error"):
@@ -1020,7 +996,6 @@ def init_session():
             if key not in session:
                 session[key] = default_value
         
-        # Generate conversation ID if not exists
         if not session.get("conversation_id"):
             session["conversation_id"] = get_conversation_id()
         
@@ -1094,7 +1069,6 @@ def evaluate_dynamic_handler(question, answer, all_answers):
 def process_handler_next(current_ref, answer):
     """Process next question using StateMachineEngine"""
     try:
-        # First try the state engine from response.json (the flow diagram)
         result = state_engine.get_next_question_ref(current_ref, answer)
         
         if result.get("status") == "success" and result.get("next_ref"):
@@ -1102,7 +1076,6 @@ def process_handler_next(current_ref, answer):
         elif result.get("status") == "completed":
             return {"status": "completed"}
         
-        # Fallback: use the legacy handlerNext logic for backward compatibility
         question = get_question(current_ref)
         if not question:
             return {"status": "completed"}
@@ -1151,15 +1124,11 @@ def process_handler_next(current_ref, answer):
 def get_next_question_in_phase(current_ref):
     """Get next question using StateMachineEngine to follow the flow diagram"""
     try:
-        # Use the state machine to determine the next question
-        # First, get the most recent answer
         current_answer = session.get("answers", {}).get(current_ref)
         
         if current_answer is None:
-            # If no answer yet, just move to next question
             return {"status": "success", "next_ref": current_ref, "completed": False}
         
-        # Use the state engine to get next question based on current answer
         result = state_engine.get_next_question_ref(current_ref, current_answer)
         
         if result.get("status") == "success" and result.get("next_ref"):
@@ -1167,7 +1136,6 @@ def get_next_question_in_phase(current_ref):
         elif result.get("status") == "completed":
             return {"status": "completed"}
         else:
-            # If no explicit handler, we're at the end
             return {"status": "completed"}
         
     except Exception as e:
@@ -1305,7 +1273,6 @@ def add_message(role, content, options=None, input_type=None):
         session["messages"].append(message)
         session.modified = True
         
-        # Save conversation to storage with updated title
         save_conversation(
             session.get("conversation_id"),
             session.get("messages", []),
@@ -1372,10 +1339,8 @@ def show_phase_transition():
     try:
         if session.get("phase") == 2 and not session.get("phase_transition_shown"):
             transition_msg = "✅ **Thank you for completing the Refund Assessment!**\n\n"
-            transition_msg += "---\n\n"
             transition_msg += "Now let's move to the next step: **💰 Savings Assessment**\n"
             transition_msg += "Please answer the following questions about your travel and expenses to calculate your potential tax savings.\n"
-            transition_msg += "\n---\n"
             
             add_message("assistant", transition_msg)
             session["phase_transition_shown"] = True
@@ -1412,7 +1377,6 @@ def run_xhr_params(question, answer, current_ref):
 def send_to_savy(answers, phase, phase_name, ai_summary=None):
     """Send assessment data to Savy API - using the correct v1 endpoint"""
     try:
-        # Prepare data for Savy API
         savy_data = {
             "phase": phase,
             "phase_name": phase_name,
@@ -1421,7 +1385,6 @@ def send_to_savy(answers, phase, phase_name, ai_summary=None):
             "user_answers": {}
         }
         
-        # Format answers for Savy
         for ref, answer in answers.items():
             question = get_question(ref)
             if question:
@@ -1437,7 +1400,6 @@ def send_to_savy(answers, phase, phase_name, ai_summary=None):
         if ai_summary:
             savy_data["ai_summary"] = ai_summary
         
-        # Send to Savy API - CORRECT ENDPOINT
         logger.info("📤 Sending assessment data to Savy API...")
         response = make_savy_request("api/v1/refund-estimations", "POST", savy_data)
         
@@ -1470,7 +1432,6 @@ def complete_assessment():
         logger.info(f"Answers count: {len(answers)}")
         logger.info(f"Phase: {phase}")
         
-        # Build plain text summary for AI and display
         plain_summary = f"{phase_name} Summary:\n\n"
         for ref, answer in answers.items():
             question = get_question(ref)
@@ -1480,7 +1441,6 @@ def complete_assessment():
                     title = title(answers)
                 plain_summary += f"{title}\n→ {answer}\n\n"
         
-        # Try to get AI summary with clear logging
         use_ai = os.environ.get("USE_AI", "").lower() in ["1", "true", "yes"]
         provider = os.environ.get("AI_PROVIDER", "gemini").lower()
         
@@ -1499,7 +1459,6 @@ def complete_assessment():
         
         logger.info(f"Provider enabled: {provider_enabled}")
         
-        # Add a "AI is thinking" message that will be shown in the UI
         thinking_message = "🤖 **AI Assistant is analyzing your responses...**\n\n*This may take a moment while I generate your personalized tax assessment.*"
         add_message("assistant", thinking_message)
         
@@ -1518,7 +1477,6 @@ def complete_assessment():
                 logger.info(f"📝 Summary Input:\n{plain_summary}\n")
                 logger.info(f"🔄 Calling ai_client.generate()...")
                 
-                # Simulate a small delay to make AI processing visible
                 time.sleep(0.8)
                 
                 ai_summary = ai_client.generate(
@@ -1546,11 +1504,9 @@ def complete_assessment():
         else:
             logger.warning(f"⚠️  Skipping AI summary: use_ai={use_ai}, provider_enabled={provider_enabled}")
         
-        # Remove the thinking message from messages list
         if session["messages"] and "AI Assistant is analyzing your responses" in session["messages"][-1].get("content", ""):
             session["messages"].pop()
         
-        # If AI summary is None or empty, generate a fallback summary from answers
         if not ai_summary:
             logger.info("📝 Generating fallback summary from answers...")
             fallback_parts = []
@@ -1560,7 +1516,6 @@ def complete_assessment():
                     title = question.get("title", ref)
                     if callable(title):
                         title = title(answers)
-                    # Clean up the answer for display
                     clean_answer = str(answer).replace('\n', ' ')
                     fallback_parts.append(f"• {title}: {clean_answer}")
             
@@ -1574,10 +1529,8 @@ def complete_assessment():
             else:
                 ai_summary = "Thank you for completing the tax assessment. Your responses have been recorded and will be reviewed by our tax specialists."
         
-        # Send data to Savy API - Refund Estimation
         send_to_savy(answers, phase, phase_name, ai_summary)
         
-        # Update the tax estimation with final data
         tax_estimation_id = session.get("tax_estimation_id")
         if tax_estimation_id and session.get("tax_estimation_initiated"):
             try:
@@ -1595,7 +1548,6 @@ def complete_assessment():
             except Exception as e:
                 logger.error(f"Error updating tax estimation with final data: {e}")
         
-        # Build final message
         final_message = f"🎉 **{phase_name} Complete!** 🎉\n\n"
         final_message += "=" * 50 + "\n\n"
         final_message += "📊 **Summary of Your Responses:**\n\n"
@@ -1609,7 +1561,6 @@ def complete_assessment():
                 final_message += f"• **{title}**\n"
                 final_message += f"  → {answer}\n\n"
         
-        # Always show AI summary (whether from AI API or fallback)
         if ai_summary:
             final_message += "=" * 50 + "\n\n"
             final_message += "🤖 **AI-Powered Assessment:**\n\n"
@@ -1631,7 +1582,6 @@ def complete_assessment():
         add_message("assistant", final_message)
         session.modified = True
         
-        # Save final conversation with updated title
         save_conversation(
             session.get("conversation_id"),
             session.get("messages", []),
@@ -1653,10 +1603,8 @@ def format_answer_for_display(question, answer):
     if not question:
         return str(answer)
     
-    # Clean up the answer for display
     formatted = str(answer).replace('\n', ' ')
     
-    # For numeric questions, add currency symbol if needed
     if question.get("type") in ["price", "numeric"]:
         try:
             num = float(answer)
@@ -1690,7 +1638,6 @@ def before_request():
         if request.endpoint in allowed_routes:
             return
         
-        # Check if user is authenticated for Savy API
         if not session.get("savy_authenticated") and not SAVY_USER_ID:
             return redirect(url_for("login_page"))
         
@@ -1739,7 +1686,6 @@ def load_conversation(conversation_id):
     """Load a specific conversation"""
     conv = get_conversation(conversation_id)
     if conv:
-        # Load conversation data into session
         session["messages"] = conv.get("messages", [])
         session["answers"] = conv.get("answers", {})
         session["history"] = conv.get("history", [])
@@ -1764,7 +1710,6 @@ def delete_conversation(conversation_id):
 @safe_route
 def new_conversation():
     """Create a new conversation"""
-    # Clear current session data
     session["messages"] = []
     session["answers"] = {}
     session["history"] = []
@@ -1778,8 +1723,6 @@ def new_conversation():
     session["conversation_id"] = get_conversation_id()
     session.modified = True
     
-    # Wait for user greeting before showing welcome and starting questions
-    # The chat page will render an empty conversation until the user says Hello or Hi.
     return jsonify({"success": True, "conversation_id": session["conversation_id"]})
 
 # =========================================================
@@ -1979,7 +1922,6 @@ def login_page():
             </html>
             """)
     
-    # GET request - show login form
     return render_template_string("""
     <!DOCTYPE html>
     <html>
@@ -2211,43 +2153,34 @@ def edit_answer():
         return jsonify({"status": "error", "message": "Answer not found"})
     
     try:
-        # Find the index of the question to edit
         ref_index = history.index(ref)
         
-        # Remove all answers from this point forward (including the one being edited)
-        answers_to_remove = history[ref_index:]  # Include the edited question itself
+        answers_to_remove = history[ref_index:]
         for removed_ref in answers_to_remove:
             if removed_ref in session["answers"]:
                 del session["answers"][removed_ref]
-            # Remove any proposal answers
             proposal_keys = [k for k in session["answers"].keys() if k.startswith(f"proposal_{removed_ref}")]
             for key in proposal_keys:
                 del session["answers"][key]
         
-        # Also remove any estimation data that might affect future calculations
         if "estimation_data" in session:
             session["estimation_data"] = {}
         
-        # Trim history - keep only answers before this question
         session["history"] = history[:ref_index]
         
-        # Reset phase if needed - if editing a Phase 1 question, go back to Phase 1
         if ref in PHASE_1_QUESTIONS:
             session["phase"] = 1
             session["phase_transition_shown"] = False
         elif ref in PHASE_2_QUESTIONS:
             session["phase"] = 2
         
-        # Set current question to the one being edited
         session["current_ref"] = ref
         session["waiting_for_answer"] = False
         session["pending_proposal"] = None
-        session["completed"] = False  # Ensure not in completed state
+        session["completed"] = False
         
-        # Find and remove messages from this point forward
         msg_index_to_keep = -1
         
-        # Try to find the message containing this exact question
         question_obj = get_question(ref)
         if question_obj:
             title = question_obj.get("title", "")
@@ -2259,16 +2192,13 @@ def edit_answer():
                     msg_index_to_keep = i
                     break
         
-        # If not found, try to find by answer reference
         if msg_index_to_keep == -1:
             for i, msg in enumerate(session["messages"]):
                 if msg.get("role") == "assistant" and ref in msg.get("content", ""):
                     msg_index_to_keep = i
                     break
         
-        # If still not found, keep messages up to the answer
         if msg_index_to_keep == -1:
-            # Find the last user message before this question
             for i in range(len(session["messages"]) - 1, -1, -1):
                 msg = session["messages"][i]
                 if msg.get("role") == "user":
@@ -2281,14 +2211,12 @@ def edit_answer():
         
         session.modified = True
         
-        # Now show the question again with an edit indicator
         question = get_question(ref)
         if question:
             question_text = get_question_text(question)
             options = get_options(question)
             input_type = get_question_type(question)
             
-            # Add an edit indicator and re-ask the question
             edit_message = f"✏️ **Editing your answer to:**\n\n{question_text}"
             add_message("assistant", edit_message, options, input_type)
             session["waiting_for_answer"] = True
@@ -2312,11 +2240,9 @@ def chat():
     if not session.get("passkey_verified"):
         return redirect(url_for("passkey_page"))
     
-    # Check if user is authenticated for Savy API
     if not session.get("savy_authenticated") and not SAVY_USER_ID:
         return redirect(url_for("login_page"))
     
-    # Initialize refund estimation when chat starts
     if not session.get("estimation_initiated") and not session.get("completed"):
         try:
             logger.info("🔄 Initiating refund estimation on chat start...")
@@ -2329,7 +2255,6 @@ def chat():
         except Exception as e:
             logger.error(f"Error initiating refund estimation: {e}")
     
-    # Initialize tax estimation when chat starts (Step 2)
     if not session.get("tax_estimation_initiated") and not session.get("completed"):
         try:
             logger.info("🔄 Initiating tax estimation on chat start...")
@@ -2342,12 +2267,10 @@ def chat():
         except Exception as e:
             logger.error(f"Error initiating tax estimation: {e}")
     
-    # Do not show the welcome message automatically; wait for the user to say Hello or Hi first.
     if not session.get("messages") and not session.get("completed"):
         session["awaiting_greeting"] = True
         session["awaiting_greeting_ack"] = False
     
-    # Prepare answers for sidebar
     answers_list = []
     for ref in session.get("history", []):
         if ref in session["answers"]:
@@ -2362,7 +2285,6 @@ def chat():
                     "answer": format_answer_for_display(question, session["answers"][ref])
                 })
     
-    # Get all conversations for the sidebar
     all_conversations = get_all_conversations()
     
     return render_template_string("""
@@ -3071,6 +2993,21 @@ def chat():
         
         <div class="chat-container">
             <div class="messages-container" id="messages-container">
+                {% if awaiting_greeting and not messages %}
+                    <div class="message assistant" style="animation: messageSlideIn 0.3s ease-out forwards;">
+                        <div class="message-avatar">🤖</div>
+                        <div class="message-content-wrapper">
+                            <div class="message-content" id="greeting-content">
+                                <div class="typing-indicator" id="greeting-typing">
+                                    <span class="typing-dot"></span>
+                                    <span class="typing-dot"></span>
+                                    <span class="typing-dot"></span>
+                                </div>
+                            </div>
+                            <div class="message-timestamp">{{ now|default('') }}</div>
+                        </div>
+                    </div>
+                {% endif %}
                 {% for message in messages %}
                     <div class="message {{ message.role }}" style="animation: messageSlideIn 0.3s ease-out forwards;">
                         <div class="message-avatar">
@@ -3117,12 +3054,109 @@ def chat():
         const messageInput = document.getElementById('message-input');
         const sendBtn = document.getElementById('send-btn');
         let isWaitingForResponse = false;
+        let greetingShown = false;
         
         function scrollToBottom() { 
             messagesContainer.scrollTop = messagesContainer.scrollHeight; 
         }
         
-        setTimeout(scrollToBottom, 100);
+        function autoScroll() {
+            messagesContainer.scrollTo({
+                top: messagesContainer.scrollHeight,
+                behavior: 'smooth'
+            });
+        }
+        
+        // FASTER character-by-character typing effect - reduced delays
+        function typeMessage(element, text, speed = 8) {
+            return new Promise((resolve) => {
+                let index = 0;
+                element.innerHTML = '';
+                
+                // Handle HTML tags by splitting text
+                const parts = text.split(/(<[^>]*>)/g);
+                let currentText = '';
+                
+                function typeNext() {
+                    if (index >= parts.length) {
+                        resolve();
+                        return;
+                    }
+                    
+                    const part = parts[index];
+                    
+                    // Check if this is an HTML tag
+                    if (part.startsWith('<') && part.endsWith('>')) {
+                        // It's a tag, add it all at once
+                        currentText += part;
+                        element.innerHTML = currentText;
+                        index++;
+                        autoScroll();
+                        setTimeout(typeNext, 5);
+                        return;
+                    }
+                    
+                    // It's text, type it character by character
+                    if (part.length > 0) {
+                        let charIndex = 0;
+                        const textPart = part;
+                        
+                        function typeChar() {
+                            if (charIndex < textPart.length) {
+                                currentText += textPart[charIndex];
+                                element.innerHTML = currentText;
+                                charIndex++;
+                                autoScroll();
+                                
+                                // FASTER: 5-12ms delay with small variation
+                                const delay = 5 + Math.random() * 7;
+                                setTimeout(typeChar, delay);
+                            } else {
+                                index++;
+                                setTimeout(typeNext, 5);
+                            }
+                        }
+                        typeChar();
+                    } else {
+                        index++;
+                        setTimeout(typeNext, 5);
+                    }
+                }
+                
+                typeNext();
+            });
+        }
+        
+        // Show greeting with faster typing
+        async function showGreetingWithTyping() {
+            const typingElement = document.querySelector('#greeting-typing');
+            const greetingContent = document.querySelector('#greeting-content');
+            
+            if (typingElement && greetingContent && !greetingShown) {
+                greetingShown = true;
+                
+                // Shorter wait before starting
+                await new Promise(resolve => setTimeout(resolve, 300));
+                
+                const greetingMessage = `🌅 **Good morning!**
+
+Welcome to the **Tax Assessment Bot**! We'll help you determine your eligibility for tax refunds and identify tax-saving opportunities.
+
+**📋 Phase 1: Refund Assessment** (5-10 questions)
+First, we'll check if you're eligible for a tax refund based on your income and employment.
+
+**💰 Phase 2: Savings Assessment** (5-10 questions)
+Then, we'll calculate potential tax savings based on your travel and business expenses.
+
+When you're ready, type **OK** to continue.`;
+                
+                // Replace typing dots with the message and type it out - FASTER
+                greetingContent.innerHTML = '';
+                await typeMessage(greetingContent, greetingMessage, 8);
+            }
+        }
+        
+        setTimeout(showGreetingWithTyping, 500);
         
         // Load conversations
         function loadConversations() {
@@ -3148,7 +3182,6 @@ def chat():
                     html += `<div class="recent-label">${folder}</div>`;
                     for (const conv of convs) {
                         const isActive = conv.id === '{{ conversation_id }}';
-                        // Use the conversation title or fallback
                         const title = conv.title || 'New Conversation';
                         html += `
                             <div class="conversation-item ${isActive ? 'active' : ''}" onclick="loadConversation('${conv.id}')">
@@ -3233,7 +3266,7 @@ def chat():
             messagesContainer.appendChild(userMsg);
             
             if (!predefinedAnswer) messageInput.value = '';
-            scrollToBottom();
+            autoScroll();
             
             showAIThinkingIndicator();
             
@@ -3255,43 +3288,84 @@ def chat():
                     for (let i = 0; i < data.messages.length; i++) {
                         const msg = data.messages[i];
                         
-                        if (msg.role === 'assistant') {
-                            showTypingIndicator();
-                            await new Promise(resolve => setTimeout(resolve, 500));
-                            removeTypingIndicator();
-                        }
-                        
-                        await new Promise(resolve => setTimeout(resolve, 150));
-                        
+                        // Create message container
                         const msgDiv = document.createElement('div');
                         msgDiv.className = `message ${msg.role}`;
                         
-                        let contentHtml = msg.content.replace(/\\n/g, '<br>');
+                        const contentWrapper = document.createElement('div');
+                        contentWrapper.className = 'message-content-wrapper';
                         
-                        if (msg.options && msg.options.length > 0) {
-                            let optionsHtml = '<div class="options-container">';
-                            msg.options.forEach(option => {
-                                const cleanOption = option.replace(/\\n/g, ' ');
-                                optionsHtml += `
-                                    <button class="option-btn" onclick="sendMessage('${option.replace(/'/g, "\\'").replace(/\\n/g, ' ')}')">
-                                        ${cleanOption}
-                                    </button>
-                                `;
-                            });
-                            optionsHtml += '</div>';
-                            contentHtml += optionsHtml;
+                        const contentDiv = document.createElement('div');
+                        contentDiv.className = 'message-content';
+                        contentDiv.id = `msg-content-${Date.now()}-${i}`;
+                        
+                        const timestamp = document.createElement('div');
+                        timestamp.className = 'message-timestamp';
+                        timestamp.textContent = new Date().toLocaleTimeString();
+                        
+                        contentWrapper.appendChild(contentDiv);
+                        contentWrapper.appendChild(timestamp);
+                        
+                        const avatar = document.createElement('div');
+                        avatar.className = 'message-avatar';
+                        avatar.textContent = msg.role === 'assistant' ? '🤖' : '👤';
+                        
+                        msgDiv.appendChild(avatar);
+                        msgDiv.appendChild(contentWrapper);
+                        messagesContainer.appendChild(msgDiv);
+                        autoScroll();
+                        
+                        // Type the message character by character for assistant messages - FASTER
+                        if (msg.role === 'assistant') {
+                            // Show typing indicator first (shorter)
+                            const typingDiv = document.createElement('div');
+                            typingDiv.className = 'typing-indicator';
+                            typingDiv.innerHTML = `
+                                <span class="typing-dot"></span>
+                                <span class="typing-dot"></span>
+                                <span class="typing-dot"></span>
+                            `;
+                            contentDiv.appendChild(typingDiv);
+                            autoScroll();
+                            
+                            await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 200));
+                            
+                            // Remove typing indicator and type the message - FASTER
+                            contentDiv.innerHTML = '';
+                            const fullText = msg.content;
+                            await typeMessage(contentDiv, fullText, 8);
+                            
+                            // Add options if they exist
+                            if (msg.options && msg.options.length > 0) {
+                                const optionsContainer = document.createElement('div');
+                                optionsContainer.className = 'options-container';
+                                msg.options.forEach(option => {
+                                    const btn = document.createElement('button');
+                                    btn.className = 'option-btn';
+                                    btn.textContent = option.replace(/\\n/g, ' ');
+                                    btn.onclick = () => sendMessage(option);
+                                    optionsContainer.appendChild(btn);
+                                });
+                                contentDiv.appendChild(optionsContainer);
+                            }
+                        } else {
+                            // User message appears immediately
+                            contentDiv.innerHTML = msg.content.replace(/\\n/g, '<br>');
+                            if (msg.options && msg.options.length > 0) {
+                                const optionsContainer = document.createElement('div');
+                                optionsContainer.className = 'options-container';
+                                msg.options.forEach(option => {
+                                    const btn = document.createElement('button');
+                                    btn.className = 'option-btn';
+                                    btn.textContent = option.replace(/\\n/g, ' ');
+                                    btn.onclick = () => sendMessage(option);
+                                    optionsContainer.appendChild(btn);
+                                });
+                                contentDiv.appendChild(optionsContainer);
+                            }
                         }
                         
-                        msgDiv.innerHTML = `
-                            <div class="message-avatar">${msg.role === 'assistant' ? '🤖' : '👤'}</div>
-                            <div class="message-content-wrapper">
-                                <div class="message-content">${contentHtml}</div>
-                                <div class="message-timestamp">${new Date().toLocaleTimeString()}</div>
-                            </div>
-                        `;
-                        
-                        messagesContainer.appendChild(msgDiv);
-                        scrollToBottom();
+                        autoScroll();
                     }
                 }
                 
@@ -3306,7 +3380,6 @@ def chat():
             } catch (error) { 
                 console.error('Error:', error); 
                 removeAIThinkingIndicator();
-                removeTypingIndicator();
                 setInputEnabled(true); 
                 const msgDiv = document.createElement('div');
                 msgDiv.className = 'message assistant';
@@ -3318,7 +3391,7 @@ def chat():
                     </div>
                 `;
                 messagesContainer.appendChild(msgDiv);
-                scrollToBottom();
+                autoScroll();
             } finally {
                 isWaitingForResponse = false;
             }
@@ -3340,36 +3413,11 @@ def chat():
                 </div>
             `;
             messagesContainer.appendChild(indicatorDiv);
-            scrollToBottom();
+            autoScroll();
         }
         
         function removeAIThinkingIndicator() {
             const indicator = document.getElementById('ai-thinking-indicator');
-            if (indicator) indicator.remove();
-        }
-        
-        function showTypingIndicator() {
-            const indicatorDiv = document.createElement('div');
-            indicatorDiv.id = 'typing-indicator';
-            indicatorDiv.className = 'message assistant';
-            indicatorDiv.innerHTML = `
-                <div class="message-avatar">🤖</div>
-                <div class="message-content-wrapper">
-                    <div class="message-content">
-                        <div class="typing-indicator">
-                            <span class="typing-dot"></span>
-                            <span class="typing-dot"></span>
-                            <span class="typing-dot"></span>
-                        </div>
-                    </div>
-                </div>
-            `;
-            messagesContainer.appendChild(indicatorDiv);
-            scrollToBottom();
-        }
-        
-        function removeTypingIndicator() {
-            const indicator = document.getElementById('typing-indicator');
             if (indicator) indicator.remove();
         }
         
@@ -3389,7 +3437,7 @@ def chat():
                 </div>
             `;
             messagesContainer.appendChild(msgDiv);
-            scrollToBottom();
+            autoScroll();
         }
         
         function removeAIProcessingMessage() {
@@ -3403,6 +3451,11 @@ def chat():
             if (enabled) messageInput.focus();
         }
         
+        const observer = new MutationObserver(function(mutations) {
+            autoScroll();
+        });
+        observer.observe(messagesContainer, { childList: true, subtree: true });
+        
         messageInput.addEventListener('keypress', function(e) { 
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -3412,14 +3465,14 @@ def chat():
         
         setTimeout(() => messageInput.focus(), 300);
         
-        // Load conversations on page load
         loadConversations();
     </script>
 </body>
 </html>
 """, messages=session["messages"], 
-         waiting_for_answer=session["waiting_for_answer"],
-         completed=session["completed"],
+         awaiting_greeting=session.get("awaiting_greeting", False),
+         waiting_for_answer=session.get("waiting_for_answer", False),
+         completed=session.get("completed", False),
          phase=session.get("phase", 1),
          phase_names=PHASE_NAMES,
          sidebar_open=session.get("sidebar_open", True),
@@ -3445,7 +3498,6 @@ def send_message():
     if not answer:
         return jsonify({"status": "error", "message": "Please provide an answer"})
     
-    # First user interaction must be a greeting before starting the assessment
     if session.get("awaiting_greeting"):
         normalized_answer = answer.lower().replace("!", "").strip()
         if normalized_answer in ["hello", "hi", "hey", "hello there", "hi there", "hey there"]:
@@ -3475,7 +3527,6 @@ def send_message():
     if not session.get("waiting_for_answer"):
         return jsonify({"status": "error", "message": "Not waiting for answer"})
     
-    # Handle proposal flow
     if session.get("pending_proposal"):
         proposal_data = session["pending_proposal"]
         prop_index = proposal_data.get("current_index", 0)
@@ -3529,7 +3580,6 @@ def send_message():
             
             return jsonify({"status": "success", "messages": session["messages"][-1:]})
     
-    # Regular question flow
     current_ref = session.get("current_ref")
     if not current_ref:
         session["current_ref"] = "1"
@@ -3564,7 +3614,6 @@ def send_message():
     
     run_xhr_params(question, answer, current_ref)
     
-    # Update refund estimation
     refund_estimation_id = session.get("refund_estimation_id")
     if refund_estimation_id and session.get("estimation_initiated"):
         try:
@@ -3594,7 +3643,6 @@ def send_message():
         except Exception as e:
             logger.error(f"Error updating refund estimation in real-time: {e}")
     
-    # Update tax estimation
     tax_estimation_id = session.get("tax_estimation_id")
     if tax_estimation_id and session.get("tax_estimation_initiated"):
         try:
