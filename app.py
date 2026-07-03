@@ -978,6 +978,7 @@ def init_session():
             "phase_transition_shown": False,
             "awaiting_greeting": False,
             "awaiting_greeting_ack": False,
+            "awaiting_ok": False,
             "last_activity": datetime.now().isoformat(),
             "error_count": 0,
             "estimation_data": {},
@@ -1720,6 +1721,7 @@ def new_conversation():
     session["phase_transition_shown"] = False
     session["awaiting_greeting"] = True
     session["awaiting_greeting_ack"] = False
+    session["awaiting_ok"] = False
     session["conversation_id"] = get_conversation_id()
     session.modified = True
     
@@ -2234,6 +2236,8 @@ def edit_answer():
 # CHAT ROUTE
 # =========================================================
 
+# Update the chat route - remove the automatic greeting display
+
 @app.route("/chat")
 @safe_route
 def chat():
@@ -2267,9 +2271,10 @@ def chat():
         except Exception as e:
             logger.error(f"Error initiating tax estimation: {e}")
     
+    # Set awaiting greeting if no messages and not completed
     if not session.get("messages") and not session.get("completed"):
         session["awaiting_greeting"] = True
-        session["awaiting_greeting_ack"] = False
+        session["awaiting_ok"] = False
     
     answers_list = []
     for ref in session.get("history", []):
@@ -2993,21 +2998,7 @@ def chat():
         
         <div class="chat-container">
             <div class="messages-container" id="messages-container">
-                {% if awaiting_greeting and not messages %}
-                    <div class="message assistant" style="animation: messageSlideIn 0.3s ease-out forwards;">
-                        <div class="message-avatar">🤖</div>
-                        <div class="message-content-wrapper">
-                            <div class="message-content" id="greeting-content">
-                                <div class="typing-indicator" id="greeting-typing">
-                                    <span class="typing-dot"></span>
-                                    <span class="typing-dot"></span>
-                                    <span class="typing-dot"></span>
-                                </div>
-                            </div>
-                            <div class="message-timestamp">{{ now|default('') }}</div>
-                        </div>
-                    </div>
-                {% endif %}
+                <!-- No automatic greeting message - it will appear after user says Hello -->
                 {% for message in messages %}
                     <div class="message {{ message.role }}" style="animation: messageSlideIn 0.3s ease-out forwards;">
                         <div class="message-avatar">
@@ -3054,7 +3045,6 @@ def chat():
         const messageInput = document.getElementById('message-input');
         const sendBtn = document.getElementById('send-btn');
         let isWaitingForResponse = false;
-        let greetingShown = false;
         
         function scrollToBottom() { 
             messagesContainer.scrollTop = messagesContainer.scrollHeight; 
@@ -3067,13 +3057,11 @@ def chat():
             });
         }
         
-        // FASTER character-by-character typing effect - reduced delays
         function typeMessage(element, text, speed = 8) {
             return new Promise((resolve) => {
                 let index = 0;
                 element.innerHTML = '';
                 
-                // Handle HTML tags by splitting text
                 const parts = text.split(/(<[^>]*>)/g);
                 let currentText = '';
                 
@@ -3085,9 +3073,7 @@ def chat():
                     
                     const part = parts[index];
                     
-                    // Check if this is an HTML tag
                     if (part.startsWith('<') && part.endsWith('>')) {
-                        // It's a tag, add it all at once
                         currentText += part;
                         element.innerHTML = currentText;
                         index++;
@@ -3096,7 +3082,6 @@ def chat():
                         return;
                     }
                     
-                    // It's text, type it character by character
                     if (part.length > 0) {
                         let charIndex = 0;
                         const textPart = part;
@@ -3107,8 +3092,6 @@ def chat():
                                 element.innerHTML = currentText;
                                 charIndex++;
                                 autoScroll();
-                                
-                                // FASTER: 5-12ms delay with small variation
                                 const delay = 5 + Math.random() * 7;
                                 setTimeout(typeChar, delay);
                             } else {
@@ -3127,38 +3110,6 @@ def chat():
             });
         }
         
-        // Show greeting with faster typing
-        async function showGreetingWithTyping() {
-            const typingElement = document.querySelector('#greeting-typing');
-            const greetingContent = document.querySelector('#greeting-content');
-            
-            if (typingElement && greetingContent && !greetingShown) {
-                greetingShown = true;
-                
-                // Shorter wait before starting
-                await new Promise(resolve => setTimeout(resolve, 300));
-                
-                const greetingMessage = `🌅 **Good morning!**
-
-Welcome to the **Tax Assessment Bot**! We'll help you determine your eligibility for tax refunds and identify tax-saving opportunities.
-
-**📋 Phase 1: Refund Assessment** (5-10 questions)
-First, we'll check if you're eligible for a tax refund based on your income and employment.
-
-**💰 Phase 2: Savings Assessment** (5-10 questions)
-Then, we'll calculate potential tax savings based on your travel and business expenses.
-
-When you're ready, type **OK** to continue.`;
-                
-                // Replace typing dots with the message and type it out - FASTER
-                greetingContent.innerHTML = '';
-                await typeMessage(greetingContent, greetingMessage, 8);
-            }
-        }
-        
-        setTimeout(showGreetingWithTyping, 500);
-        
-        // Load conversations
         function loadConversations() {
             fetch('/api/conversations')
                 .then(response => response.json())
@@ -3288,7 +3239,6 @@ When you're ready, type **OK** to continue.`;
                     for (let i = 0; i < data.messages.length; i++) {
                         const msg = data.messages[i];
                         
-                        // Create message container
                         const msgDiv = document.createElement('div');
                         msgDiv.className = `message ${msg.role}`;
                         
@@ -3315,9 +3265,8 @@ When you're ready, type **OK** to continue.`;
                         messagesContainer.appendChild(msgDiv);
                         autoScroll();
                         
-                        // Type the message character by character for assistant messages - FASTER
                         if (msg.role === 'assistant') {
-                            // Show typing indicator first (shorter)
+                            // Show typing indicator
                             const typingDiv = document.createElement('div');
                             typingDiv.className = 'typing-indicator';
                             typingDiv.innerHTML = `
@@ -3330,12 +3279,11 @@ When you're ready, type **OK** to continue.`;
                             
                             await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 200));
                             
-                            // Remove typing indicator and type the message - FASTER
+                            // Type the message
                             contentDiv.innerHTML = '';
                             const fullText = msg.content;
                             await typeMessage(contentDiv, fullText, 8);
                             
-                            // Add options if they exist
                             if (msg.options && msg.options.length > 0) {
                                 const optionsContainer = document.createElement('div');
                                 optionsContainer.className = 'options-container';
@@ -3349,7 +3297,6 @@ When you're ready, type **OK** to continue.`;
                                 contentDiv.appendChild(optionsContainer);
                             }
                         } else {
-                            // User message appears immediately
                             contentDiv.innerHTML = msg.content.replace(/\\n/g, '<br>');
                             if (msg.options && msg.options.length > 0) {
                                 const optionsContainer = document.createElement('div');
@@ -3498,9 +3445,11 @@ def send_message():
     if not answer:
         return jsonify({"status": "error", "message": "Please provide an answer"})
     
+    # Check if user is in the initial greeting flow (waiting for Hello)
     if session.get("awaiting_greeting"):
         normalized_answer = answer.lower().replace("!", "").strip()
         if normalized_answer in ["hello", "hi", "hey", "hello there", "hi there", "hey there"]:
+            # User said hello - show the welcome message with typing animation
             welcome_msg = "🌅 **Good morning!**\n\n"
             welcome_msg += "Welcome to the **Tax Assessment Bot**! We'll help you determine your eligibility for tax refunds and identify tax-saving opportunities.\n\n"
             welcome_msg += "**📋 Phase 1: Refund Assessment** (5-10 questions)\n"
@@ -3510,15 +3459,28 @@ def send_message():
             welcome_msg += "When you're ready, type **OK** to continue."
             add_message("assistant", welcome_msg)
             session["awaiting_greeting"] = False
-            session["awaiting_greeting_ack"] = True
+            session["awaiting_ok"] = True
             return jsonify({"status": "success", "messages": session["messages"][-1:]})
         add_message("assistant", "Please say **Hello** or **Hi** to begin the assessment.")
         return jsonify({"status": "error", "messages": [session["messages"][-1]]})
     
-    if session.get("awaiting_greeting_ack"):
+    # Check if waiting for OK after welcome message
+    if session.get("awaiting_ok"):
+        normalized_answer = answer.lower().replace("!", "").strip()
+        if normalized_answer in ["ok", "okay", "sure", "ready", "yes", "okay"]:
+            session["awaiting_ok"] = False
+            # Start the first question
+            process_next_question()
+            return jsonify({"status": "success", "messages": session["messages"][-1:]})
+        add_message("assistant", "Please type **OK** when you're ready to continue.")
+        return jsonify({"status": "error", "messages": [session["messages"][-1]]})
+    
+    # Check if waiting for OK after welcome message
+    if session.get("awaiting_ok"):
         normalized_answer = answer.lower().replace("!", "").strip()
         if normalized_answer in ["ok", "okay", "sure", "ready", "yes"]:
-            session["awaiting_greeting_ack"] = False
+            session["awaiting_ok"] = False
+            # Start the first question
             process_next_question()
             return jsonify({"status": "success", "messages": session["messages"][-1:]})
         add_message("assistant", "Please type **OK** when you're ready to continue.")
@@ -3527,6 +3489,7 @@ def send_message():
     if not session.get("waiting_for_answer"):
         return jsonify({"status": "error", "message": "Not waiting for answer"})
     
+    # Handle proposal flow
     if session.get("pending_proposal"):
         proposal_data = session["pending_proposal"]
         prop_index = proposal_data.get("current_index", 0)
@@ -3580,6 +3543,7 @@ def send_message():
             
             return jsonify({"status": "success", "messages": session["messages"][-1:]})
     
+    # Regular question flow
     current_ref = session.get("current_ref")
     if not current_ref:
         session["current_ref"] = "1"
