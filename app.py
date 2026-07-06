@@ -1,5 +1,6 @@
 from flask import Flask, request, redirect, url_for, jsonify, session
 from flask import render_template_string
+from flasgger import Swagger, swag_from
 import json
 import re
 import logging
@@ -43,7 +44,50 @@ app.config['SESSION_TYPE'] = 'filesystem'
 app.config['SESSION_PERMANENT'] = True
 app.config['PERMANENT_SESSION_LIFETIME'] = 3600
 
+# =========================================================
+# SWAGGER CONFIGURATION
+# =========================================================
+
+app.config['SWAGGER'] = {
+    'title': 'SAVY Tax Assistant API',
+    'description': 'API for the SAVY Tax Assessment Bot - helps users determine eligibility for tax refunds and identify tax-saving opportunities.',
+    'version': '1.0.0',
+    'termsOfService': 'https://savyapp.dev/terms',
+    'contact': {
+        'name': 'SAVY Support',
+        'email': 'support@savyapp.dev',
+        'url': 'https://savyapp.dev'
+    },
+    'license': {
+        'name': 'MIT',
+        'url': 'https://opensource.org/licenses/MIT'
+    },
+    'tags': [
+        {'name': 'Authentication', 'description': 'Authentication endpoints'},
+        {'name': 'Chat', 'description': 'Chat and conversation endpoints'},
+        {'name': 'Estimations', 'description': 'Tax estimation endpoints'},
+        {'name': 'Questions', 'description': 'Question management endpoints'},
+        {'name': 'Conversations', 'description': 'Conversation history management'}
+    ],
+    'securityDefinitions': {
+        'BearerAuth': {
+            'type': 'apiKey',
+            'name': 'Authorization',
+            'in': 'header',
+            'description': 'JWT token for authentication. Format: Bearer <token>'
+        }
+    },
+    'security': [
+        {'BearerAuth': []}
+    ]
+}
+
+swagger = Swagger(app)
+
+# =========================================================
 # Set up logging
+# =========================================================
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -977,7 +1021,6 @@ def init_session():
             "phase": 1,
             "phase_transition_shown": False,
             "awaiting_greeting": False,
-            "awaiting_greeting_ack": False,
             "awaiting_ok": False,
             "last_activity": datetime.now().isoformat(),
             "error_count": 0,
@@ -1635,7 +1678,7 @@ def before_request():
     try:
         init_session()
         
-        allowed_routes = ["passkey_page", "verify_passkey", "static", "favicon", "toggle_sidebar", "edit_answer", "login_page", "auth_email_login", "get_conversations", "load_conversation", "delete_conversation", "new_conversation", "start_new_assessment"]
+        allowed_routes = ["passkey_page", "verify_passkey", "static", "favicon", "toggle_sidebar", "edit_answer", "login_page", "auth_email_login", "get_conversations", "load_conversation", "delete_conversation", "new_conversation", "start_new_assessment", "swagger", "swagger-ui", "swagger_spec", "api_docs"]
         if request.endpoint in allowed_routes:
             return
         
@@ -1652,11 +1695,17 @@ def before_request():
 @app.route("/")
 @safe_route
 def index():
+    """Redirect to chat or API documentation"""
     if not session.get("savy_authenticated") and not SAVY_USER_ID:
         return redirect(url_for("login_page"))
     if not session.get("passkey_verified"):
         return redirect(url_for("passkey_page"))
     return redirect(url_for("chat"))
+
+@app.route("/api/docs")
+def api_docs():
+    """Redirect to Swagger UI"""
+    return redirect("/apidocs/")
 
 # =========================================================
 # START NEW ASSESSMENT - Redirects to passkey page
@@ -1674,8 +1723,52 @@ def start_new_assessment():
 # CONVERSATION MANAGEMENT ROUTES
 # =========================================================
 
+# Ajouter cette documentation pour la route GET /api/conversations
 @app.route("/api/conversations", methods=["GET"])
 @safe_route
+@swag_from({
+    'tags': ['Conversations'],
+    'summary': 'Get all conversations organized by folder',
+    'description': 'Retrieves all conversations for the current user, organized into folders (Today, Yesterday, Previous 7 Days, Older).',
+    'responses': {
+        200: {
+            'description': 'Successful operation',
+            'schema': {
+                'type': 'object',
+                'properties': {
+                    'success': {'type': 'boolean', 'example': True},
+                    'conversations': {
+                        'type': 'object',
+                        'properties': {
+                            'Today': {
+                                'type': 'array',
+                                'items': {
+                                    'type': 'object',
+                                    'properties': {
+                                        'id': {'type': 'string'},
+                                        'title': {'type': 'string'},
+                                        'messages': {'type': 'array'},
+                                        'answers': {'type': 'object'},
+                                        'history': {'type': 'array'},
+                                        'phase': {'type': 'integer'},
+                                        'completed': {'type': 'boolean'},
+                                        'last_updated': {'type': 'string'}
+                                    }
+                                }
+                            },
+                            'Yesterday': {'type': 'array'},
+                            'Previous 7 Days': {'type': 'array'},
+                            'Older': {'type': 'array'}
+                        }
+                    }
+                }
+            }
+        },
+        401: {
+            'description': 'Authentication required'
+        }
+    }
+})
 def get_conversations():
     """Get all conversations organized by folder"""
     organized = get_all_conversations()
@@ -1683,6 +1776,34 @@ def get_conversations():
 
 @app.route("/api/conversation/<conversation_id>", methods=["GET"])
 @safe_route
+@swag_from({
+    'tags': ['Conversations'],
+    'summary': 'Get a specific conversation by ID',
+    'parameters': [
+        {
+            'name': 'conversation_id',
+            'in': 'path',
+            'type': 'string',
+            'required': True,
+            'description': 'The ID of the conversation to retrieve'
+        }
+    ],
+    'responses': {
+        200: {
+            'description': 'Successful operation',
+            'schema': {
+                'type': 'object',
+                'properties': {
+                    'success': {'type': 'boolean'},
+                    'conversation': {'type': 'object'}
+                }
+            }
+        },
+        404: {
+            'description': 'Conversation not found'
+        }
+    }
+})
 def load_conversation(conversation_id):
     """Load a specific conversation"""
     conv = get_conversation(conversation_id)
@@ -1700,6 +1821,33 @@ def load_conversation(conversation_id):
 
 @app.route("/api/conversation/<conversation_id>", methods=["DELETE"])
 @safe_route
+@swag_from({
+    'tags': ['Conversations'],
+    'summary': 'Delete a conversation by ID',
+    'parameters': [
+        {
+            'name': 'conversation_id',
+            'in': 'path',
+            'type': 'string',
+            'required': True,
+            'description': 'The ID of the conversation to delete'
+        }
+    ],
+    'responses': {
+        200: {
+            'description': 'Conversation deleted successfully',
+            'schema': {
+                'type': 'object',
+                'properties': {
+                    'success': {'type': 'boolean'}
+                }
+            }
+        },
+        404: {
+            'description': 'Conversation not found'
+        }
+    }
+})
 def delete_conversation(conversation_id):
     """Delete a conversation"""
     if conversation_id in conversations:
@@ -1709,6 +1857,23 @@ def delete_conversation(conversation_id):
 
 @app.route("/api/conversation/new", methods=["POST"])
 @safe_route
+@swag_from({
+    'tags': ['Conversations'],
+    'summary': 'Create a new conversation',
+    'description': 'Creates a new conversation with a unique ID and initializes the greeting flow.',
+    'responses': {
+        200: {
+            'description': 'Conversation created successfully',
+            'schema': {
+                'type': 'object',
+                'properties': {
+                    'success': {'type': 'boolean'},
+                    'conversation_id': {'type': 'string'}
+                }
+            }
+        }
+    }
+})
 def new_conversation():
     """Create a new conversation"""
     session["messages"] = []
@@ -1720,7 +1885,6 @@ def new_conversation():
     session["waiting_for_answer"] = False
     session["phase_transition_shown"] = False
     session["awaiting_greeting"] = True
-    session["awaiting_greeting_ack"] = False
     session["awaiting_ok"] = False
     session["conversation_id"] = get_conversation_id()
     session.modified = True
@@ -2016,6 +2180,47 @@ def login_page():
 
 @app.route("/api/auth/email/login", methods=["POST"])
 @safe_route
+@swag_from({
+    'tags': ['Authentication'],
+    'summary': 'Authenticate user with email and password',
+    'description': 'Authenticates a user and returns a JWT token for subsequent API calls.',
+    'parameters': [
+        {
+            'name': 'body',
+            'in': 'body',
+            'required': True,
+            'schema': {
+                'type': 'object',
+                'properties': {
+                    'email': {'type': 'string', 'description': 'User email address'},
+                    'password': {'type': 'string', 'description': 'User password'}
+                },
+                'required': ['email', 'password']
+            }
+        }
+    ],
+    'responses': {
+        200: {
+            'description': 'Authentication successful',
+            'schema': {
+                'type': 'object',
+                'properties': {
+                    'success': {'type': 'boolean'},
+                    'message': {'type': 'string'},
+                    'token': {'type': 'string'},
+                    'user_id': {'type': 'string'},
+                    'data': {'type': 'object'}
+                }
+            }
+        },
+        400: {
+            'description': 'Invalid request'
+        },
+        401: {
+            'description': 'Authentication failed'
+        }
+    }
+})
 def auth_email_login():
     """
     Authenticate user with email and password
@@ -2236,8 +2441,6 @@ def edit_answer():
 # CHAT ROUTE
 # =========================================================
 
-# Update the chat route - remove the automatic greeting display
-
 @app.route("/chat")
 @safe_route
 def chat():
@@ -2271,7 +2474,6 @@ def chat():
         except Exception as e:
             logger.error(f"Error initiating tax estimation: {e}")
     
-    # Set awaiting greeting if no messages and not completed
     if not session.get("messages") and not session.get("completed"):
         session["awaiting_greeting"] = True
         session["awaiting_ok"] = False
@@ -3057,7 +3259,8 @@ def chat():
             });
         }
         
-        function typeMessage(element, text, speed = 8) {
+        // Slower typing effect - increased delay between characters
+        function typeMessage(element, text, speed = 25) {
             return new Promise((resolve) => {
                 let index = 0;
                 element.innerHTML = '';
@@ -3078,7 +3281,7 @@ def chat():
                         element.innerHTML = currentText;
                         index++;
                         autoScroll();
-                        setTimeout(typeNext, 5);
+                        setTimeout(typeNext, 10);
                         return;
                     }
                     
@@ -3092,17 +3295,18 @@ def chat():
                                 element.innerHTML = currentText;
                                 charIndex++;
                                 autoScroll();
-                                const delay = 5 + Math.random() * 7;
+                                // Slower: 25-40ms per character with variation
+                                const delay = 25 + Math.random() * 15;
                                 setTimeout(typeChar, delay);
                             } else {
                                 index++;
-                                setTimeout(typeNext, 5);
+                                setTimeout(typeNext, 10);
                             }
                         }
                         typeChar();
                     } else {
                         index++;
-                        setTimeout(typeNext, 5);
+                        setTimeout(typeNext, 10);
                     }
                 }
                 
@@ -3277,12 +3481,13 @@ def chat():
                             contentDiv.appendChild(typingDiv);
                             autoScroll();
                             
-                            await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 200));
+                            // Longer pause before typing starts
+                            await new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 300));
                             
-                            // Type the message
+                            // Type the message - slower speed
                             contentDiv.innerHTML = '';
                             const fullText = msg.content;
-                            await typeMessage(contentDiv, fullText, 8);
+                            await typeMessage(contentDiv, fullText, 25);
                             
                             if (msg.options && msg.options.length > 0) {
                                 const optionsContainer = document.createElement('div');
@@ -3433,6 +3638,96 @@ def chat():
 
 @app.route("/send_message", methods=["POST"])
 @safe_route
+@swag_from({
+    'tags': ['Chat'],
+    'summary': 'Send a message to the chat bot',
+    'description': 'Processes user input and returns the bot response with typing animation',
+    'parameters': [
+        {
+            'name': 'body',
+            'in': 'body',
+            'required': True,
+            'schema': {
+                'type': 'object',
+                'properties': {
+                    'answer': {
+                        'type': 'string',
+                        'description': 'The user message',
+                        'example': 'Hello'
+                    }
+                },
+                'required': ['answer']
+            }
+        }
+    ],
+    'responses': {
+        200: {
+            'description': 'Message processed successfully',
+            'schema': {
+                'type': 'object',
+                'properties': {
+                    'status': {
+                        'type': 'string',
+                        'enum': ['success', 'completed', 'phase_complete', 'error']
+                    },
+                    'messages': {
+                        'type': 'array',
+                        'items': {
+                            'type': 'object',
+                            'properties': {
+                                'role': {
+                                    'type': 'string',
+                                    'enum': ['user', 'assistant']
+                                },
+                                'content': {
+                                    'type': 'string'
+                                },
+                                'options': {
+                                    'type': 'array',
+                                    'items': {
+                                        'type': 'string'
+                                    }
+                                },
+                                'timestamp': {
+                                    'type': 'string'
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            'examples': {
+                'application/json': {
+                    'status': 'success',
+                    'messages': [
+                        {
+                            'role': 'assistant',
+                            'content': '🌅 **Good morning!** Welcome to the Tax Assessment Bot!',
+                            'options': None,
+                            'timestamp': '2024-01-01T10:00:05'
+                        }
+                    ]
+                }
+            }
+        },
+        400: {
+            'description': 'Invalid request',
+            'schema': {
+                'type': 'object',
+                'properties': {
+                    'status': {
+                        'type': 'string',
+                        'example': 'error'
+                    },
+                    'message': {
+                        'type': 'string',
+                        'example': 'Please provide an answer'
+                    }
+                }
+            }
+        }
+    }
+})
 def send_message():
     if session.get("completed"):
         return jsonify({"status": "completed"})
@@ -3445,11 +3740,10 @@ def send_message():
     if not answer:
         return jsonify({"status": "error", "message": "Please provide an answer"})
     
-    # Check if user is in the initial greeting flow (waiting for Hello)
+    # Check if user is in the initial greeting flow
     if session.get("awaiting_greeting"):
         normalized_answer = answer.lower().replace("!", "").strip()
         if normalized_answer in ["hello", "hi", "hey", "hello there", "hi there", "hey there"]:
-            # User said hello - show the welcome message with typing animation
             welcome_msg = "🌅 **Good morning!**\n\n"
             welcome_msg += "Welcome to the **Tax Assessment Bot**! We'll help you determine your eligibility for tax refunds and identify tax-saving opportunities.\n\n"
             welcome_msg += "**📋 Phase 1: Refund Assessment** (5-10 questions)\n"
@@ -3464,23 +3758,10 @@ def send_message():
         add_message("assistant", "Please say **Hello** or **Hi** to begin the assessment.")
         return jsonify({"status": "error", "messages": [session["messages"][-1]]})
     
-    # Check if waiting for OK after welcome message
-    if session.get("awaiting_ok"):
-        normalized_answer = answer.lower().replace("!", "").strip()
-        if normalized_answer in ["ok", "okay", "sure", "ready", "yes", "okay"]:
-            session["awaiting_ok"] = False
-            # Start the first question
-            process_next_question()
-            return jsonify({"status": "success", "messages": session["messages"][-1:]})
-        add_message("assistant", "Please type **OK** when you're ready to continue.")
-        return jsonify({"status": "error", "messages": [session["messages"][-1]]})
-    
-    # Check if waiting for OK after welcome message
     if session.get("awaiting_ok"):
         normalized_answer = answer.lower().replace("!", "").strip()
         if normalized_answer in ["ok", "okay", "sure", "ready", "yes"]:
             session["awaiting_ok"] = False
-            # Start the first question
             process_next_question()
             return jsonify({"status": "success", "messages": session["messages"][-1:]})
         add_message("assistant", "Please type **OK** when you're ready to continue.")
@@ -3656,8 +3937,6 @@ def send_message():
     else:
         complete_assessment()
         return jsonify({"status": "completed", "messages": session["messages"][-1:]})
-    
-    return jsonify({"status": "success", "messages": session["messages"][-1:]})
 
 # =========================================================
 # SAVY API ROUTES - REFUND ESTIMATION
@@ -3665,6 +3944,28 @@ def send_message():
 
 @app.route("/api/savy/initiate-refund", methods=["POST"])
 @safe_route
+@swag_from({
+    'tags': ['Estimations'],
+    'summary': 'Initiate a refund estimation',
+    'description': 'Creates a new refund estimation with empty body.',
+    'responses': {
+        200: {
+            'description': 'Refund estimation initiated',
+            'schema': {
+                'type': 'object',
+                'properties': {
+                    'success': {'type': 'boolean'},
+                    'message': {'type': 'string'},
+                    'estimation_id': {'type': 'string'},
+                    'data': {'type': 'object'}
+                }
+            }
+        },
+        500: {
+            'description': 'Internal server error'
+        }
+    }
+})
 def initiate_refund():
     try:
         result = initiate_refund_estimation()
@@ -3686,6 +3987,36 @@ def initiate_refund():
 
 @app.route("/api/savy/update-refund", methods=["POST"])
 @safe_route
+@swag_from({
+    'tags': ['Estimations'],
+    'summary': 'Update refund estimation in real-time',
+    'description': 'Updates the refund estimation with client answers in real-time.',
+    'parameters': [
+        {
+            'name': 'body',
+            'in': 'body',
+            'required': True,
+            'schema': {
+                'type': 'object',
+                'properties': {
+                    'estimation_id': {'type': 'string', 'description': 'The estimation ID'},
+                    'answers': {'type': 'object', 'description': 'User answers'},
+                    'last_answered': {'type': 'string', 'description': 'Last answered question ref'},
+                    'current_phase': {'type': 'integer', 'description': 'Current phase number'},
+                    'progress': {'type': 'object', 'description': 'Progress information'}
+                }
+            }
+        }
+    ],
+    'responses': {
+        200: {
+            'description': 'Estimation updated successfully'
+        },
+        400: {
+            'description': 'Invalid request'
+        }
+    }
+})
 def update_refund():
     try:
         data = request.get_json() or {}
@@ -3734,6 +4065,34 @@ def update_refund():
 
 @app.route("/api/savy/initiate-estimation", methods=["POST"])
 @safe_route
+@swag_from({
+    'tags': ['Estimations'],
+    'summary': 'Initiate a tax estimation',
+    'description': 'Creates a new tax estimation with user ID and start date.',
+    'parameters': [
+        {
+            'name': 'body',
+            'in': 'body',
+            'required': True,
+            'schema': {
+                'type': 'object',
+                'properties': {
+                    'userId': {'type': 'string', 'description': 'User ID'},
+                    'startDate': {'type': 'string', 'description': 'Start date (YYYY-MM-DD)'}
+                },
+                'required': ['userId', 'startDate']
+            }
+        }
+    ],
+    'responses': {
+        200: {
+            'description': 'Estimation initiated successfully'
+        },
+        401: {
+            'description': 'Authentication required'
+        }
+    }
+})
 def initiate_estimation():
     try:
         if not session.get("savy_authenticated") and not SAVY_USER_ID:
@@ -3762,6 +4121,31 @@ def initiate_estimation():
 
 @app.route("/api/savy/update-estimation", methods=["POST"])
 @safe_route
+@swag_from({
+    'tags': ['Estimations'],
+    'summary': 'Update tax estimation in real-time',
+    'description': 'Updates the tax estimation with client answers in real-time.',
+    'parameters': [
+        {
+            'name': 'body',
+            'in': 'body',
+            'required': True,
+            'schema': {
+                'type': 'object',
+                'properties': {
+                    'estimation_id': {'type': 'string', 'description': 'The estimation ID'},
+                    'answers': {'type': 'object', 'description': 'User answers'},
+                    'last_answered': {'type': 'string', 'description': 'Last answered question ref'}
+                }
+            }
+        }
+    ],
+    'responses': {
+        200: {
+            'description': 'Estimation updated successfully'
+        }
+    }
+})
 def update_estimation():
     try:
         data = request.get_json() or {}
@@ -3806,6 +4190,27 @@ def update_estimation():
 
 @app.route("/api/savy/get-estimation/<estimation_id>", methods=["GET"])
 @safe_route
+@swag_from({
+    'tags': ['Estimations'],
+    'summary': 'Get a specific tax estimation by ID',
+    'parameters': [
+        {
+            'name': 'estimation_id',
+            'in': 'path',
+            'type': 'string',
+            'required': True,
+            'description': 'The estimation ID'
+        }
+    ],
+    'responses': {
+        200: {
+            'description': 'Estimation retrieved successfully'
+        },
+        404: {
+            'description': 'Estimation not found'
+        }
+    }
+})
 def get_estimation(estimation_id):
     try:
         result = get_tax_estimation(estimation_id)
@@ -3820,6 +4225,18 @@ def get_estimation(estimation_id):
 
 @app.route("/api/savy/get-all-estimations", methods=["GET"])
 @safe_route
+@swag_from({
+    'tags': ['Estimations'],
+    'summary': 'Get all tax estimations for the current user',
+    'responses': {
+        200: {
+            'description': 'Estimations retrieved successfully'
+        },
+        400: {
+            'description': 'Error retrieving estimations'
+        }
+    }
+})
 def get_all_estimations():
     try:
         result = get_all_tax_estimations()
@@ -3834,6 +4251,27 @@ def get_all_estimations():
 
 @app.route("/api/savy/delete-estimation/<estimation_id>", methods=["DELETE"])
 @safe_route
+@swag_from({
+    'tags': ['Estimations'],
+    'summary': 'Delete a tax estimation by ID',
+    'parameters': [
+        {
+            'name': 'estimation_id',
+            'in': 'path',
+            'type': 'string',
+            'required': True,
+            'description': 'The estimation ID to delete'
+        }
+    ],
+    'responses': {
+        200: {
+            'description': 'Estimation deleted successfully'
+        },
+        400: {
+            'description': 'Error deleting estimation'
+        }
+    }
+})
 def delete_estimation(estimation_id):
     try:
         result = delete_tax_estimation(estimation_id)
