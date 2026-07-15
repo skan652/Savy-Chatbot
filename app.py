@@ -1,16 +1,20 @@
 from flask import Flask, request, redirect, url_for, jsonify, session
 from flask import render_template_string
 from flasgger import Swagger, swag_from
+from flask_httpauth import HTTPBasicAuth
+from werkzeug.security import generate_password_hash, check_password_hash
 import json
 import re
 import logging
 from datetime import datetime, timedelta
 from functools import wraps
+from pyngrok import ngrok
 import inspect
 import os
 import time
 import requests
 import uuid
+
 
 # Load .env BEFORE importing ai_client to ensure env vars are set
 dotenv_path = os.path.join(os.getcwd(), ".env")
@@ -45,12 +49,38 @@ app.config['SESSION_PERMANENT'] = True
 app.config['PERMANENT_SESSION_LIFETIME'] = 3600
 
 # =========================================================
+# AUTHENTIFICATION SWAGGER
+# =========================================================
+
+# Configuration des utilisateurs Swagger
+SWAGGER_USERS = {
+    "admin": generate_password_hash("savypass123"),
+    "demo": generate_password_hash("demopass123")
+}
+
+auth = HTTPBasicAuth()
+
+@auth.verify_password
+def verify_password(username, password):
+    """Vérifie le mot de passe pour l'accès à Swagger"""
+    if username in SWAGGER_USERS and check_password_hash(SWAGGER_USERS.get(username), password):
+        return username
+    return None
+
+# =========================================================
 # SWAGGER CONFIGURATION
 # =========================================================
 
 app.config['SWAGGER'] = {
     'title': 'SAVY Tax Assistant API',
-    'description': 'API for the SAVY Tax Assessment Bot - helps users determine eligibility for tax refunds and identify tax-saving opportunities.',
+    'description': '''
+    API for the SAVY Tax Assessment Bot.
+    
+    🔒 **Authentification requise pour accéder à cette documentation**
+    Utilisez les identifiants suivants :
+    - Utilisateur: `admin`
+    - Mot de passe: `savypass123`
+    ''',
     'version': '1.0.0',
     'termsOfService': 'https://savyapp.dev/terms',
     'contact': {
@@ -63,11 +93,11 @@ app.config['SWAGGER'] = {
         'url': 'https://opensource.org/licenses/MIT'
     },
     'tags': [
-        {'name': 'Authentication', 'description': 'Authentication endpoints'},
-        {'name': 'Chat', 'description': 'Chat and conversation endpoints'},
-        {'name': 'Estimations', 'description': 'Tax estimation endpoints'},
-        {'name': 'Questions', 'description': 'Question management endpoints'},
-        {'name': 'Conversations', 'description': 'Conversation history management'}
+        {'name': 'Authentication', 'description': '🔐 Authentification endpoints'},
+        {'name': 'Chat', 'description': '💬 Chat endpoints'},
+        {'name': 'Estimations', 'description': '📊 Estimation endpoints'},
+        {'name': 'Questions', 'description': '❓ Question management'},
+        {'name': 'Conversations', 'description': '📁 Conversation management'}
     ],
     'securityDefinitions': {
         'BearerAuth': {
@@ -79,11 +109,295 @@ app.config['SWAGGER'] = {
     },
     'security': [
         {'BearerAuth': []}
-    ]
+    ],
+    'specs_route': '/apidocs/',
+    'uiversion': 3,
+    'swagger_ui_bundle_js': '//unpkg.com/swagger-ui-dist@3/swagger-ui-bundle.js',
+    'swagger_ui_standalone_preset_js': '//unpkg.com/swagger-ui-dist@3/swagger-ui-standalone-preset.js',
+    'swagger_ui_css': '//unpkg.com/swagger-ui-dist@3/swagger-ui.css',
 }
 
+# Initialiser Swagger
 swagger = Swagger(app)
 
+# =========================================================
+# PROTECTION DE L'INTERFACE SWAGGER
+# =========================================================
+
+@app.before_request
+def protect_swagger():
+    """Protège l'interface Swagger avec une authentification HTTP"""
+    if request.path.startswith('/apidocs/') or request.path == '/apidocs' or request.path == '/swagger_spec' or request.path == '/apispec.json':
+        auth_header = request.headers.get('Authorization')
+        if not auth_header:
+            return auth.login_required(lambda: None)()
+    # Permettre l'accès au serveur Swagger
+    if request.path.startswith('/flasgger_static/'):
+        return None
+    
+# =========================================================
+# PAGE DE LOGIN SWAGGER PERSONNALISÉE
+# =========================================================
+
+@app.route('/apidocs/login', methods=['GET', 'POST'])
+def swagger_login():
+    """Page de login pour Swagger"""
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        if username in SWAGGER_USERS and check_password_hash(SWAGGER_USERS.get(username), password):
+            # Créer une session pour Swagger
+            session['swagger_authenticated'] = True
+            session['swagger_user'] = username
+            return redirect(url_for('apidocs_redirect'))
+        else:
+            return render_template_string("""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Login - Swagger API Documentation</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    * { box-sizing: border-box; }
+                    body {
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                        background: linear-gradient(135deg, #1a1a2e, #16213e);
+                        margin: 0;
+                        padding: 20px;
+                        min-height: 100vh;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                    }
+                    .container {
+                        background: white;
+                        max-width: 400px;
+                        width: 100%;
+                        padding: 40px;
+                        border-radius: 16px;
+                        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                        text-align: center;
+                    }
+                    .logo {
+                        font-size: 2em;
+                        font-weight: 700;
+                        color: #1a1a2e;
+                        margin-bottom: 5px;
+                    }
+                    .logo span { color: #d63384; }
+                    .subtitle {
+                        color: #666;
+                        margin-bottom: 30px;
+                        font-size: 0.9em;
+                    }
+                    input {
+                        width: 100%;
+                        padding: 14px;
+                        border: 2px solid #e0e0e0;
+                        border-radius: 12px;
+                        font-size: 1em;
+                        margin-bottom: 15px;
+                        transition: border-color 0.3s ease;
+                    }
+                    input:focus {
+                        outline: none;
+                        border-color: #d63384;
+                    }
+                    button {
+                        width: 100%;
+                        padding: 14px;
+                        background: linear-gradient(45deg, #d63384, #a02070);
+                        color: white;
+                        border: none;
+                        border-radius: 12px;
+                        font-size: 1.1em;
+                        cursor: pointer;
+                        font-weight: 600;
+                        transition: transform 0.2s ease, box-shadow 0.2s ease;
+                    }
+                    button:hover {
+                        transform: translateY(-2px);
+                        box-shadow: 0 10px 20px rgba(214, 51, 132, 0.3);
+                    }
+                    .error {
+                        background: #fee;
+                        padding: 12px;
+                        border-radius: 12px;
+                        color: #c33;
+                        margin-bottom: 20px;
+                        font-size: 0.9em;
+                    }
+                    .credits {
+                        margin-top: 20px;
+                        padding: 15px;
+                        background: #f8f8fa;
+                        border-radius: 12px;
+                        font-size: 0.85em;
+                        color: #666;
+                        text-align: left;
+                    }
+                    .credits strong { color: #333; }
+                    .credits code {
+                        background: #f0f0f0;
+                        padding: 2px 8px;
+                        border-radius: 4px;
+                        font-size: 0.85em;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="logo">SAV<span>Y</span></div>
+                    <p class="subtitle">🔒 API Documentation Access</p>
+                    <div class="error">❌ Invalid credentials. Please try again.</div>
+                    <form method="POST">
+                        <input type="text" name="username" placeholder="Username" required autofocus>
+                        <input type="password" name="password" placeholder="Password" required>
+                        <button type="submit">Access Documentation</button>
+                    </form>
+                    <div class="credits">
+                        <strong>🔑 Default Credentials:</strong><br>
+                        Username: <code>admin</code><br>
+                        Password: <code>savypass123</code>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """)
+    
+    # GET request - show login form
+    return render_template_string("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Login - Swagger API Documentation</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            * { box-sizing: border-box; }
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                background: linear-gradient(135deg, #1a1a2e, #16213e);
+                margin: 0;
+                padding: 20px;
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .container {
+                background: white;
+                max-width: 400px;
+                width: 100%;
+                padding: 40px;
+                border-radius: 16px;
+                box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                text-align: center;
+            }
+            .logo {
+                font-size: 2em;
+                font-weight: 700;
+                color: #1a1a2e;
+                margin-bottom: 5px;
+            }
+            .logo span { color: #d63384; }
+            .subtitle {
+                color: #666;
+                margin-bottom: 30px;
+                font-size: 0.9em;
+            }
+            input {
+                width: 100%;
+                padding: 14px;
+                border: 2px solid #e0e0e0;
+                border-radius: 12px;
+                font-size: 1em;
+                margin-bottom: 15px;
+                transition: border-color 0.3s ease;
+            }
+            input:focus {
+                outline: none;
+                border-color: #d63384;
+            }
+            button {
+                width: 100%;
+                padding: 14px;
+                background: linear-gradient(45deg, #d63384, #a02070);
+                color: white;
+                border: none;
+                border-radius: 12px;
+                font-size: 1.1em;
+                cursor: pointer;
+                font-weight: 600;
+                transition: transform 0.2s ease, box-shadow 0.2s ease;
+            }
+            button:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 10px 20px rgba(214, 51, 132, 0.3);
+            }
+            .credits {
+                margin-top: 20px;
+                padding: 15px;
+                background: #f8f8fa;
+                border-radius: 12px;
+                font-size: 0.85em;
+                color: #666;
+                text-align: left;
+            }
+            .credits strong { color: #333; }
+            .credits code {
+                background: #f0f0f0;
+                padding: 2px 8px;
+                border-radius: 4px;
+                font-size: 0.85em;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="logo">SAV<span>Y</span></div>
+            <p class="subtitle">🔒 API Documentation Access</p>
+            <form method="POST">
+                <input type="text" name="username" placeholder="Username" required autofocus>
+                <input type="password" name="password" placeholder="Password" required>
+                <button type="submit">Access Documentation</button>
+            </form>
+            <div class="credits">
+                <strong>🔑 Default Credentials:</strong><br>
+                Username: <code>admin</code><br>
+                Password: <code>savypass123</code>
+            </div>
+        </div>
+    </body>
+    </html>
+    """)
+
+@app.route('/apidocs/redirect')
+def apidocs_redirect():
+    """Redirection vers Swagger UI après login"""
+    if not session.get('swagger_authenticated'):
+        return redirect(url_for('swagger_login'))
+    return redirect('/apidocs/')
+
+# =========================================================
+# PROTECTION DES ROUTES SWAGGER AVEC AUTH
+# =========================================================
+
+# Modifier la route de swagger pour utiliser l'authentification
+@app.route('/apidocs/', defaults={'path': ''})
+@app.route('/apidocs/<path:path>')
+@auth.login_required
+def protected_apidocs(path):
+    """Route protégée pour Swagger UI"""
+    # Rediriger vers le vrai endpoint Swagger
+    return redirect(f'/flasgger_ui/{path}' if path else '/flasgger_ui/')
+
+# Ajouter une route pour la spécification
+@app.route('/swagger_spec')
+@auth.login_required
+def protected_swagger_spec():
+    """Route protégée pour la spécification Swagger"""
+    return redirect('/apispec.json')    
 # =========================================================
 # Set up logging
 # =========================================================
