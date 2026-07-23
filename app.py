@@ -8,13 +8,12 @@ import re
 import logging
 from datetime import datetime, timedelta
 from functools import wraps
-from pyngrok import ngrok
 import inspect
 import os
 import time
 import requests
 import uuid
-
+from difflib import SequenceMatcher
 
 # Load .env BEFORE importing ai_client to ensure env vars are set
 dotenv_path = os.path.join(os.getcwd(), ".env")
@@ -49,7 +48,7 @@ app.config['SESSION_PERMANENT'] = True
 app.config['PERMANENT_SESSION_LIFETIME'] = 3600
 
 # =========================================================
-# AUTHENTIFICATION SWAGGER
+# SWAGGER AUTHENTICATION
 # =========================================================
 
 # Configuration des utilisateurs Swagger
@@ -76,10 +75,17 @@ app.config['SWAGGER'] = {
     'description': '''
     API for the SAVY Tax Assessment Bot.
     
-    🔒 **Authentification requise pour accéder à cette documentation**
-    Utilisez les identifiants suivants :
-    - Utilisateur: `admin`
-    - Mot de passe: `savypass123`
+    ## 🔒 Authentication Required
+    To access this documentation, use:
+    - Username: `admin`
+    - Password: `savypass123`
+    
+    ## 📋 Features
+    - 🔐 Authentication endpoints
+    - 💬 Chat conversations
+    - 📊 Tax estimations
+    - 🔍 Search functionality
+    - 📁 Conversation management
     ''',
     'version': '1.0.0',
     'termsOfService': 'https://savyapp.dev/terms',
@@ -93,10 +99,10 @@ app.config['SWAGGER'] = {
         'url': 'https://opensource.org/licenses/MIT'
     },
     'tags': [
-        {'name': 'Authentication', 'description': '🔐 Authentification endpoints'},
-        {'name': 'Chat', 'description': '💬 Chat endpoints'},
-        {'name': 'Estimations', 'description': '📊 Estimation endpoints'},
-        {'name': 'Questions', 'description': '❓ Question management'},
+        {'name': 'Authentication', 'description': '🔐 Authentication endpoints'},
+        {'name': 'Chat', 'description': '💬 Chat and messaging endpoints'},
+        {'name': 'Estimations', 'description': '📊 Tax estimation endpoints'},
+        {'name': 'Search', 'description': '🔍 Search functionality'},
         {'name': 'Conversations', 'description': '📁 Conversation management'}
     ],
     'securityDefinitions': {
@@ -117,7 +123,6 @@ app.config['SWAGGER'] = {
     'swagger_ui_css': '//unpkg.com/swagger-ui-dist@3/swagger-ui.css',
 }
 
-# Initialiser Swagger
 swagger = Swagger(app)
 
 # =========================================================
@@ -131,13 +136,8 @@ def protect_swagger():
         auth_header = request.headers.get('Authorization')
         if not auth_header:
             return auth.login_required(lambda: None)()
-    # Permettre l'accès au serveur Swagger
     if request.path.startswith('/flasgger_static/'):
         return None
-    
-# =========================================================
-# PAGE DE LOGIN SWAGGER PERSONNALISÉE
-# =========================================================
 
 @app.route('/apidocs/login', methods=['GET', 'POST'])
 def swagger_login():
@@ -147,7 +147,6 @@ def swagger_login():
         password = request.form.get('password')
         
         if username in SWAGGER_USERS and check_password_hash(SWAGGER_USERS.get(username), password):
-            # Créer une session pour Swagger
             session['swagger_authenticated'] = True
             session['swagger_user'] = username
             return redirect(url_for('apidocs_redirect'))
@@ -266,7 +265,6 @@ def swagger_login():
             </html>
             """)
     
-    # GET request - show login form
     return render_template_string("""
     <!DOCTYPE html>
     <html>
@@ -379,25 +377,19 @@ def apidocs_redirect():
         return redirect(url_for('swagger_login'))
     return redirect('/apidocs/')
 
-# =========================================================
-# PROTECTION DES ROUTES SWAGGER AVEC AUTH
-# =========================================================
-
-# Modifier la route de swagger pour utiliser l'authentification
 @app.route('/apidocs/', defaults={'path': ''})
 @app.route('/apidocs/<path:path>')
 @auth.login_required
 def protected_apidocs(path):
     """Route protégée pour Swagger UI"""
-    # Rediriger vers le vrai endpoint Swagger
     return redirect(f'/flasgger_ui/{path}' if path else '/flasgger_ui/')
 
-# Ajouter une route pour la spécification
 @app.route('/swagger_spec')
 @auth.login_required
 def protected_swagger_spec():
     """Route protégée pour la spécification Swagger"""
-    return redirect('/apispec.json')    
+    return redirect('/apispec.json')
+
 # =========================================================
 # Set up logging
 # =========================================================
@@ -542,6 +534,150 @@ def categorize_conversation():
         return "Previous 7 Days"
     else:
         return "Older"
+
+# =========================================================
+# CHAT SEARCH FUNCTIONALITY
+# =========================================================
+
+def highlight_match(text, query):
+    """
+    Highlight matching text with HTML tags
+    
+    Args:
+        text (str): The text to search in
+        query (str): The search query
+    
+    Returns:
+        str: Text with highlighted matches
+    """
+    if not query or not text:
+        return text
+    
+    # Escape HTML entities
+    text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    
+    # Use regex to find all occurrences (case insensitive)
+    pattern = re.compile(re.escape(query), re.IGNORECASE)
+    highlighted = pattern.sub(r'<mark class="search-highlight">\g<0></mark>', text)
+    
+    return highlighted
+
+def search_conversations_advanced(query, filters=None):
+    """
+    Advanced search with filters
+    
+    Args:
+        query (str): The search query
+        filters (dict): Optional filters like:
+            - date_from: ISO date string
+            - date_to: ISO date string
+            - phase: 1 or 2
+            - completed: True/False
+            - folder: 'Today', 'Yesterday', etc.
+    
+    Returns:
+        dict: Filtered and sorted search results
+    """
+    results = {}
+    query_lower = query.lower() if query else ""
+    
+    for conv_id, conv in conversations.items():
+        # Apply filters
+        if filters:
+            # Date filter
+            if 'date_from' in filters:
+                conv_date = datetime.fromisoformat(conv.get("last_updated", ""))
+                date_from = datetime.fromisoformat(filters['date_from'])
+                if conv_date < date_from:
+                    continue
+            
+            if 'date_to' in filters:
+                conv_date = datetime.fromisoformat(conv.get("last_updated", ""))
+                date_to = datetime.fromisoformat(filters['date_to'])
+                if conv_date > date_to:
+                    continue
+            
+            # Phase filter
+            if 'phase' in filters and conv.get("phase") != filters['phase']:
+                continue
+            
+            # Completed filter
+            if 'completed' in filters and conv.get("completed") != filters['completed']:
+                continue
+            
+            # Folder filter
+            if 'folder' in filters and conv.get("folder") != filters['folder']:
+                continue
+        
+        # If no query, return all conversations matching filters
+        if not query:
+            results[conv_id] = {
+                "conversation": conv,
+                "matches": [],
+                "score": 0
+            }
+            continue
+        
+        # Search with query
+        matches = []
+        score = 0
+        
+        # Search in title
+        title = conv.get("title", "")
+        if query_lower in title.lower():
+            matches.append({
+                "type": "title",
+                "content": title,
+                "highlight": highlight_match(title, query)
+            })
+            score += 10
+        
+        # Search in messages
+        for msg in conv.get("messages", []):
+            content = msg.get("content", "")
+            if query_lower in content.lower():
+                matches.append({
+                    "type": "message",
+                    "role": msg.get("role", ""),
+                    "content": content,
+                    "highlight": highlight_match(content, query),
+                    "timestamp": msg.get("timestamp", "")
+                })
+                score += 5
+        
+        # Search in answers
+        for ref, answer in conv.get("answers", {}).items():
+            answer_str = str(answer)
+            if query_lower in answer_str.lower():
+                question = QUESTION_MAP.get(str(ref))
+                question_text = question.get("title", ref) if question else ref
+                if callable(question_text):
+                    try:
+                        question_text = question_text({})
+                    except:
+                        question_text = ref
+                
+                matches.append({
+                    "type": "answer",
+                    "ref": ref,
+                    "question": question_text,
+                    "answer": answer_str,
+                    "highlight": highlight_match(answer_str, query)
+                })
+                score += 3
+        
+        if matches:
+            results[conv_id] = {
+                "conversation": conv,
+                "matches": matches,
+                "score": score
+            }
+    
+    # Sort by score (highest first)
+    sorted_results = dict(sorted(results.items(), 
+                                key=lambda x: x[1]["score"], 
+                                reverse=True))
+    return sorted_results
 
 # =========================================================
 # SAVY API INTEGRATION
@@ -1992,7 +2128,7 @@ def before_request():
     try:
         init_session()
         
-        allowed_routes = ["passkey_page", "verify_passkey", "static", "favicon", "toggle_sidebar", "edit_answer", "login_page", "auth_email_login", "get_conversations", "load_conversation", "delete_conversation", "new_conversation", "start_new_assessment", "swagger", "swagger-ui", "swagger_spec", "api_docs"]
+        allowed_routes = ["passkey_page", "verify_passkey", "static", "favicon", "toggle_sidebar", "edit_answer", "login_page", "auth_email_login", "get_conversations", "load_conversation", "delete_conversation", "new_conversation", "start_new_assessment", "swagger", "swagger-ui", "swagger_spec", "api_docs", "swagger_login", "apidocs_redirect", "protected_apidocs", "protected_swagger_spec"]
         if request.endpoint in allowed_routes:
             return
         
@@ -2037,7 +2173,6 @@ def start_new_assessment():
 # CONVERSATION MANAGEMENT ROUTES
 # =========================================================
 
-# Ajouter cette documentation pour la route GET /api/conversations
 @app.route("/api/conversations", methods=["GET"])
 @safe_route
 @swag_from({
@@ -2050,30 +2185,10 @@ def start_new_assessment():
             'schema': {
                 'type': 'object',
                 'properties': {
-                    'success': {'type': 'boolean', 'example': True},
+                    'success': {'type': 'boolean'},
                     'conversations': {
                         'type': 'object',
-                        'properties': {
-                            'Today': {
-                                'type': 'array',
-                                'items': {
-                                    'type': 'object',
-                                    'properties': {
-                                        'id': {'type': 'string'},
-                                        'title': {'type': 'string'},
-                                        'messages': {'type': 'array'},
-                                        'answers': {'type': 'object'},
-                                        'history': {'type': 'array'},
-                                        'phase': {'type': 'integer'},
-                                        'completed': {'type': 'boolean'},
-                                        'last_updated': {'type': 'string'}
-                                    }
-                                }
-                            },
-                            'Yesterday': {'type': 'array'},
-                            'Previous 7 Days': {'type': 'array'},
-                            'Older': {'type': 'array'}
-                        }
+                        'description': 'Object containing conversation folders'
                     }
                 }
             }
@@ -2204,6 +2319,170 @@ def new_conversation():
     session.modified = True
     
     return jsonify({"success": True, "conversation_id": session["conversation_id"]})
+
+# =========================================================
+# SEARCH ROUTES
+# =========================================================
+
+@app.route("/api/search", methods=["POST"])
+@safe_route
+@swag_from({
+    'tags': ['Search'],
+    'summary': 'Search through conversations',
+    'description': 'Search for text in conversation titles, messages, and answers.',
+    'parameters': [
+        {
+            'name': 'body',
+            'in': 'body',
+            'required': True,
+            'schema': {
+                'type': 'object',
+                'properties': {
+                    'query': {
+                        'type': 'string',
+                        'description': 'The search query',
+                        'example': 'tax refund'
+                    },
+                    'search_type': {
+                        'type': 'string',
+                        'enum': ['all', 'messages', 'answers', 'titles'],
+                        'description': 'Where to search',
+                        'default': 'all'
+                    },
+                    'filters': {
+                        'type': 'object',
+                        'properties': {
+                            'date_from': {'type': 'string', 'format': 'date'},
+                            'date_to': {'type': 'string', 'format': 'date'},
+                            'phase': {'type': 'integer', 'enum': [1, 2]},
+                            'completed': {'type': 'boolean'},
+                            'folder': {'type': 'string', 'enum': ['Today', 'Yesterday', 'Previous 7 Days', 'Older']}
+                        }
+                    }
+                },
+                'required': ['query']
+            }
+        }
+    ],
+    'responses': {
+        200: {
+            'description': 'Search results',
+            'schema': {
+                'type': 'object',
+                'properties': {
+                    'success': {'type': 'boolean'},
+                    'results': {'type': 'array'},
+                    'total': {'type': 'integer'}
+                }
+            }
+        },
+        400: {
+            'description': 'Invalid request'
+        }
+    }
+})
+def search_conversations_route():
+    """
+    Search through conversations
+    POST /api/search
+    Body: { "query": "search text", "search_type": "all", "filters": {} }
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+        
+        query = data.get("query", "").strip()
+        search_type = data.get("search_type", "all")
+        filters = data.get("filters", {})
+        
+        if not query and not filters:
+            return jsonify({"error": "Please provide a search query or filters"}), 400
+        
+        results = search_conversations_advanced(query, filters)
+        
+        formatted_results = []
+        for conv_id, result in results.items():
+            conv = result["conversation"]
+            formatted_results.append({
+                "id": conv_id,
+                "title": conv.get("title", "New Conversation"),
+                "last_updated": conv.get("last_updated", ""),
+                "phase": conv.get("phase", 1),
+                "completed": conv.get("completed", False),
+                "folder": conv.get("folder", "Older"),
+                "match_count": len(result["matches"]),
+                "matches": result["matches"]
+            })
+        
+        return jsonify({
+            "success": True,
+            "results": formatted_results,
+            "total": len(formatted_results),
+            "query": query,
+            "search_type": search_type
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in search_conversations: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/search/suggest", methods=["GET"])
+@safe_route
+@swag_from({
+    'tags': ['Search'],
+    'summary': 'Get search suggestions',
+    'description': 'Returns suggested search terms based on popular queries.',
+    'responses': {
+        200: {
+            'description': 'Search suggestions',
+            'schema': {
+                'type': 'object',
+                'properties': {
+                    'success': {'type': 'boolean'},
+                    'suggestions': {'type': 'array'}
+                }
+            }
+        }
+    }
+})
+def get_search_suggestions():
+    """
+    Get search suggestions based on popular queries
+    GET /api/search/suggest
+    """
+    try:
+        suggestions = set()
+        
+        for conv_id, conv in conversations.items():
+            title = conv.get("title", "")
+            words = title.lower().split()
+            for word in words:
+                if len(word) > 3:
+                    suggestions.add(word)
+            
+            for ref, answer in conv.get("answers", {}).items():
+                answer_str = str(answer).lower()
+                if len(answer_str) > 3:
+                    suggestions.add(answer_str[:30])
+        
+        common_terms = [
+            "income", "tax", "refund", "savings", "travel", "mileage",
+            "vehicle", "work", "expenses", "food", "drink", "commuting",
+            "employer", "temporary", "workplace", "journey"
+        ]
+        
+        for term in common_terms:
+            suggestions.add(term)
+        
+        return jsonify({
+            "success": True,
+            "suggestions": list(suggestions)[:20]
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in get_search_suggestions: {e}")
+        return jsonify({"error": str(e)}), 500
 
 # =========================================================
 # AUTHENTICATION ROUTES
@@ -2752,7 +3031,7 @@ def edit_answer():
         return jsonify({"status": "error", "message": str(e)})
 
 # =========================================================
-# CHAT ROUTE
+# CHAT ROUTE - Contains the full chat template
 # =========================================================
 
 @app.route("/chat")
@@ -2876,6 +3155,208 @@ def chat():
         .new-chat-btn:hover {
             background: #b02a6e;
             transform: scale(1.02);
+        }
+        
+        /* Search Styles */
+        .search-container {
+            padding: 8px 12px;
+            border-bottom: 1px solid #f0f0f0;
+            position: relative;
+        }
+        
+        .search-bar {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        
+        .search-bar input {
+            flex: 1;
+            padding: 8px 12px;
+            border: 2px solid #e8e8ec;
+            border-radius: 20px;
+            font-size: 0.85em;
+            outline: none;
+            transition: all 0.3s ease;
+            background: #f8f8fa;
+        }
+        
+        .search-bar input:focus {
+            border-color: #d63384;
+            background: white;
+            box-shadow: 0 0 0 3px rgba(214, 51, 132, 0.06);
+        }
+        
+        .search-btn {
+            background: none;
+            border: none;
+            font-size: 1.2em;
+            cursor: pointer;
+            padding: 4px 8px;
+            color: #999;
+            transition: color 0.3s ease;
+        }
+        
+        .search-btn:hover {
+            color: #d63384;
+        }
+        
+        .search-filters {
+            padding: 8px 0;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            align-items: center;
+        }
+        
+        .search-filters select {
+            padding: 4px 8px;
+            border: 1px solid #e0e0e0;
+            border-radius: 12px;
+            font-size: 0.75em;
+            background: white;
+            outline: none;
+            cursor: pointer;
+        }
+        
+        .search-filters select:focus {
+            border-color: #d63384;
+        }
+        
+        .clear-search-btn {
+            background: none;
+            border: none;
+            color: #999;
+            cursor: pointer;
+            font-size: 0.9em;
+            padding: 0 4px;
+        }
+        
+        .clear-search-btn:hover {
+            color: #d63384;
+        }
+        
+        .search-results {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+            max-height: 400px;
+            overflow-y: auto;
+            z-index: 1000;
+            margin-top: 4px;
+            display: none;
+        }
+        
+        .search-results.show {
+            display: block;
+        }
+        
+        .search-results-header {
+            padding: 12px 16px;
+            border-bottom: 1px solid #f0f0f0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.85em;
+            color: #666;
+            position: sticky;
+            top: 0;
+            background: white;
+            z-index: 1;
+        }
+        
+        .close-results-btn {
+            background: none;
+            border: none;
+            color: #999;
+            cursor: pointer;
+            font-size: 1em;
+        }
+        
+        .close-results-btn:hover {
+            color: #d63384;
+        }
+        
+        .search-result-item {
+            padding: 12px 16px;
+            border-bottom: 1px solid #f5f5f5;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+        
+        .search-result-item:hover {
+            background: #f8f8fa;
+        }
+        
+        .search-result-title {
+            font-weight: 600;
+            font-size: 0.9em;
+            color: #333;
+            margin-bottom: 4px;
+        }
+        
+        .search-result-preview {
+            font-size: 0.85em;
+            color: #666;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        
+        .search-result-meta {
+            font-size: 0.7em;
+            color: #999;
+            margin-top: 4px;
+        }
+        
+        .search-highlight {
+            background-color: #ffeb3b;
+            padding: 1px 4px;
+            border-radius: 2px;
+            font-weight: 600;
+        }
+        
+        .search-result-item .match-type {
+            display: inline-block;
+            padding: 1px 8px;
+            border-radius: 10px;
+            font-size: 0.65em;
+            font-weight: 600;
+            margin-right: 6px;
+        }
+        
+        .match-type.title {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+        
+        .match-type.message {
+            background: #f3e5f5;
+            color: #7b1fa2;
+        }
+        
+        .match-type.answer {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+        
+        .no-results {
+            padding: 30px 20px;
+            text-align: center;
+            color: #999;
+            font-size: 0.9em;
+        }
+        
+        .no-results .icon {
+            font-size: 2em;
+            display: block;
+            margin-bottom: 10px;
         }
         
         .sidebar-nav {
@@ -3490,6 +3971,41 @@ def chat():
                 <button class="new-chat-btn" onclick="window.location.href='/start_new_assessment'">+ New Chat</button>
             </div>
             
+            <!-- Search Bar -->
+            <div class="search-container">
+                <div class="search-bar">
+                    <input type="text" id="search-input" placeholder="🔍 Search conversations..." 
+                           onkeyup="handleSearch(this.value)" autocomplete="off">
+                    <button class="search-btn" onclick="toggleSearch()" title="Advanced filters">⚙️</button>
+                </div>
+                <div id="search-filters" class="search-filters" style="display:none;">
+                    <select id="search-type" onchange="performSearch()">
+                        <option value="all">All</option>
+                        <option value="messages">Messages</option>
+                        <option value="answers">Answers</option>
+                        <option value="titles">Titles</option>
+                    </select>
+                    <select id="search-phase" onchange="performSearch()">
+                        <option value="">All Phases</option>
+                        <option value="1">Phase 1</option>
+                        <option value="2">Phase 2</option>
+                    </select>
+                    <select id="search-status" onchange="performSearch()">
+                        <option value="">All Status</option>
+                        <option value="true">Completed</option>
+                        <option value="false">In Progress</option>
+                    </select>
+                    <button onclick="clearSearch()" class="clear-search-btn" title="Clear filters">✕</button>
+                </div>
+                <div id="search-results" class="search-results">
+                    <div class="search-results-header">
+                        <span id="result-count">0 results</span>
+                        <button onclick="closeSearch()" class="close-results-btn">✕</button>
+                    </div>
+                    <div id="results-list"></div>
+                </div>
+            </div>
+            
             <div class="sidebar-nav">
                 <div class="nav-item active">
                     <span class="nav-icon">💬</span>
@@ -3508,6 +4024,9 @@ def chat():
                 <div style="display: flex; align-items: center; gap: 10px; font-size: 0.75em; color: #999;">
                     <span>👤</span>
                     <span>User</span>
+                    <span style="margin-left: auto; font-size: 0.7em; color: #ccc;">
+                        ⌘K to search
+                    </span>
                 </div>
             </div>
         </div>
@@ -3561,6 +4080,7 @@ def chat():
         const messageInput = document.getElementById('message-input');
         const sendBtn = document.getElementById('send-btn');
         let isWaitingForResponse = false;
+        let searchTimeout = null;
         
         function scrollToBottom() { 
             messagesContainer.scrollTop = messagesContainer.scrollHeight; 
@@ -3573,7 +4093,7 @@ def chat():
             });
         }
         
-        // Slower typing effect - increased delay between characters
+        // Slower typing effect
         function typeMessage(element, text, speed = 25) {
             return new Promise((resolve) => {
                 let index = 0;
@@ -3609,7 +4129,6 @@ def chat():
                                 element.innerHTML = currentText;
                                 charIndex++;
                                 autoScroll();
-                                // Slower: 25-40ms per character with variation
                                 const delay = 25 + Math.random() * 15;
                                 setTimeout(typeChar, delay);
                             } else {
@@ -3627,6 +4146,165 @@ def chat():
                 typeNext();
             });
         }
+        
+        // =========================================================
+        // SEARCH FUNCTIONALITY
+        // =========================================================
+        
+        function handleSearch(query) {
+            clearTimeout(searchTimeout);
+            
+            if (query.length < 2) {
+                document.getElementById('search-results').classList.remove('show');
+                return;
+            }
+            
+            searchTimeout = setTimeout(() => {
+                performSearch();
+            }, 300);
+        }
+        
+        function toggleSearch() {
+            const filters = document.getElementById('search-filters');
+            if (filters.style.display === 'none') {
+                filters.style.display = 'flex';
+            } else {
+                filters.style.display = 'none';
+            }
+        }
+        
+        function performSearch() {
+            const query = document.getElementById('search-input').value.trim();
+            const searchType = document.getElementById('search-type').value;
+            const phase = document.getElementById('search-phase').value;
+            const status = document.getElementById('search-status').value;
+            
+            if (!query && !phase && !status) {
+                document.getElementById('search-results').classList.remove('show');
+                return;
+            }
+            
+            const filters = {};
+            if (phase) filters.phase = parseInt(phase);
+            if (status !== '') filters.completed = status === 'true';
+            
+            document.getElementById('results-list').innerHTML = 
+                '<div class="no-results"><span class="icon">⏳</span>Searching...</div>';
+            document.getElementById('search-results').classList.add('show');
+            
+            fetch('/api/search', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    query: query,
+                    search_type: searchType,
+                    filters: filters
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    renderSearchResults(data.results, data.total);
+                } else {
+                    document.getElementById('results-list').innerHTML = 
+                        `<div class="no-results"><span class="icon">❌</span>${data.error || 'Search failed'}</div>`;
+                }
+            })
+            .catch(error => {
+                document.getElementById('results-list').innerHTML = 
+                    `<div class="no-results"><span class="icon">❌</span>Error: ${error.message}</div>`;
+            });
+        }
+        
+        function renderSearchResults(results, total) {
+            const container = document.getElementById('results-list');
+            const countEl = document.getElementById('result-count');
+            
+            countEl.textContent = `${total} result${total !== 1 ? 's' : ''}`;
+            
+            if (results.length === 0) {
+                container.innerHTML = `
+                    <div class="no-results">
+                        <span class="icon">🔍</span>
+                        No conversations found matching your search
+                    </div>
+                `;
+                return;
+            }
+            
+            let html = '';
+            results.forEach(result => {
+                const folderIcon = getFolderIcon(result.folder);
+                const statusIcon = result.completed ? '✅' : '⏳';
+                
+                html += `
+                    <div class="search-result-item" onclick="loadConversation('${result.id}')">
+                        <div class="search-result-title">
+                            ${statusIcon} ${result.title}
+                            <span style="font-size:0.8em;color:#999;font-weight:400;margin-left:8px;">
+                                ${folderIcon} ${result.folder}
+                            </span>
+                        </div>
+                        <div class="search-result-preview">
+                            ${result.matches.slice(0, 3).map(match => {
+                                const typeLabel = getMatchTypeLabel(match.type);
+                                return `<span class="match-type ${match.type}">${typeLabel}</span> ${match.highlight || match.content}`;
+                            }).join('<br>')}
+                            ${result.match_count > 3 ? `<span style="color:#999;font-size:0.85em;">... and ${result.match_count - 3} more matches</span>` : ''}
+                        </div>
+                        <div class="search-result-meta">
+                            Phase ${result.phase} • ${new Date(result.last_updated).toLocaleString()}
+                        </div>
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = html;
+        }
+        
+        function getMatchTypeLabel(type) {
+            const labels = {
+                'title': 'Title',
+                'message': 'Message',
+                'answer': 'Answer'
+            };
+            return labels[type] || type;
+        }
+        
+        function getFolderIcon(folder) {
+            const icons = {
+                'Today': '📅',
+                'Yesterday': '📆',
+                'Previous 7 Days': '📋',
+                'Older': '🗂️'
+            };
+            return icons[folder] || '📁';
+        }
+        
+        function clearSearch() {
+            document.getElementById('search-input').value = '';
+            document.getElementById('search-results').classList.remove('show');
+            document.getElementById('search-filters').style.display = 'none';
+        }
+        
+        function closeSearch() {
+            document.getElementById('search-results').classList.remove('show');
+        }
+        
+        // Keyboard shortcut: Ctrl+K or Cmd+K to focus search
+        document.addEventListener('keydown', function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                e.preventDefault();
+                document.getElementById('search-input').focus();
+            }
+            if (e.key === 'Escape') {
+                closeSearch();
+            }
+        });
+        
+        // =========================================================
+        // LOAD CONVERSATIONS
+        // =========================================================
         
         function loadConversations() {
             fetch('/api/conversations')
@@ -3696,6 +4374,10 @@ def chat():
                     .catch(error => console.error('Error deleting conversation:', error));
             }
         }
+        
+        // =========================================================
+        // CHAT FUNCTIONALITY
+        // =========================================================
         
         function editAnswer(ref) {
             if (confirm('Edit this answer? This will reset all answers after this question.')) {
@@ -3784,7 +4466,6 @@ def chat():
                         autoScroll();
                         
                         if (msg.role === 'assistant') {
-                            // Show typing indicator
                             const typingDiv = document.createElement('div');
                             typingDiv.className = 'typing-indicator';
                             typingDiv.innerHTML = `
@@ -3795,10 +4476,8 @@ def chat():
                             contentDiv.appendChild(typingDiv);
                             autoScroll();
                             
-                            // Longer pause before typing starts
                             await new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 300));
                             
-                            // Type the message - slower speed
                             contentDiv.innerHTML = '';
                             const fullText = msg.content;
                             await typeMessage(contentDiv, fullText, 25);
@@ -3989,56 +4668,18 @@ def chat():
                         'items': {
                             'type': 'object',
                             'properties': {
-                                'role': {
-                                    'type': 'string',
-                                    'enum': ['user', 'assistant']
-                                },
-                                'content': {
-                                    'type': 'string'
-                                },
-                                'options': {
-                                    'type': 'array',
-                                    'items': {
-                                        'type': 'string'
-                                    }
-                                },
-                                'timestamp': {
-                                    'type': 'string'
-                                }
+                                'role': {'type': 'string', 'enum': ['user', 'assistant']},
+                                'content': {'type': 'string'},
+                                'options': {'type': 'array'},
+                                'timestamp': {'type': 'string'}
                             }
                         }
                     }
                 }
-            },
-            'examples': {
-                'application/json': {
-                    'status': 'success',
-                    'messages': [
-                        {
-                            'role': 'assistant',
-                            'content': '🌅 **Good morning!** Welcome to the Tax Assessment Bot!',
-                            'options': None,
-                            'timestamp': '2024-01-01T10:00:05'
-                        }
-                    ]
-                }
             }
         },
         400: {
-            'description': 'Invalid request',
-            'schema': {
-                'type': 'object',
-                'properties': {
-                    'status': {
-                        'type': 'string',
-                        'example': 'error'
-                    },
-                    'message': {
-                        'type': 'string',
-                        'example': 'Please provide an answer'
-                    }
-                }
-            }
+            'description': 'Invalid request'
         }
     }
 })
@@ -4251,6 +4892,8 @@ def send_message():
     else:
         complete_assessment()
         return jsonify({"status": "completed", "messages": session["messages"][-1:]})
+    
+    return jsonify({"status": "success", "messages": session["messages"][-1:]})
 
 # =========================================================
 # SAVY API ROUTES - REFUND ESTIMATION
